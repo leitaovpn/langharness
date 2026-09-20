@@ -9,9 +9,8 @@ import pytest
 
 from langharness_plugin.config_store import (
     PluginConfigStore,
-    apply_overrides,
+    merge_overrides,
 )
-from langharness_plugin.registry import PluginDescriptor
 
 
 def make_store(tmp_path: Path, scope: str = "api") -> PluginConfigStore:
@@ -107,40 +106,24 @@ def test_load_rejects_broken_files(tmp_path: Path) -> None:
         PluginConfigStore.load(path, "api")
 
 
-def test_apply_overrides_merges_enabled_and_properties() -> None:
-    descriptor = PluginDescriptor(
-        name="api-rate-limit",
-        version="1.0.0",
-        module="langharness_api.plugins.rate_limit.rate_limit",
-        factory="api-rate-limit-plugin-factory",
-        instance="api-rate-limit",
-        specification="api.plugin.rate_limit",
-        properties={"plugin.limit": 100},
+def test_merge_overrides_merges_enabled_and_properties() -> None:
+    defaults = {"plugin.limit": 100}
+
+    enabled, properties = merge_overrides(
+        defaults, {"enabled": False, "properties": {"plugin.limit": 5}}
     )
 
-    merged = apply_overrides(
-        descriptor, {"enabled": False, "properties": {"plugin.limit": 5}}
-    )
-
-    assert merged.enabled is False
-    assert merged.properties == {"plugin.limit": 5}
-    assert descriptor.enabled is True
-    assert descriptor.properties == {"plugin.limit": 100}
+    assert enabled is False
+    assert properties == {"plugin.limit": 5}
+    assert defaults == {"plugin.limit": 100}
 
 
-def test_apply_overrides_keeps_descriptor_defaults() -> None:
-    descriptor = PluginDescriptor(
-        name="api-auth",
-        version="1.0.0",
-        module="m",
-        factory="f",
-        instance="i",
-        specification="api.plugin.auth",
-        properties={"plugin.token": "secret"},
-    )
-    merged = apply_overrides(descriptor, {})
-    assert merged.enabled is True
-    assert merged.properties == {"plugin.token": "secret"}
+def test_merge_overrides_keeps_defaults() -> None:
+    defaults = {"plugin.token": "secret"}
+    enabled, properties = merge_overrides(defaults, {})
+    assert enabled is True
+    assert properties == {"plugin.token": "secret"}
+    assert defaults == {"plugin.token": "secret"}
 
 
 def test_config_of_returns_a_copy(tmp_path: Path) -> None:

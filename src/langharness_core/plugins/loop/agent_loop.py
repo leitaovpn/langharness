@@ -45,6 +45,7 @@ from langharness_plugin.scope_policy import (
     resolve_scoped_aggregate,
     resolve_scoped_best,
 )
+from langharness_plugin.scoped_dependencies import ScopedDependencies
 from langharness_plugin.validation import ContractGuard
 
 LOGGER = logging.getLogger("langharness.agent")
@@ -169,6 +170,19 @@ def _iter_interrupts(container: Any) -> Iterator[Any]:
     TransformersProvider,
     aggregate=True,
     optional=True,
+)
+@ScopedDependencies(
+    "_llm_provider",
+    "_scoped_llm_providers",
+    "_tool_providers",
+    "_middleware_providers",
+    "_system_prompt_providers",
+    "_name_provider",
+    "_response_format_provider",
+    "_cache_provider",
+    "_transformers_providers",
+    "_interrupt_before_providers",
+    "_interrupt_after_providers",
 )
 class PluginAgentLoop:
     """Rebuilds a LangChain agent graph when injected services change."""

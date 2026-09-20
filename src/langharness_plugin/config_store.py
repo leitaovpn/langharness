@@ -8,12 +8,10 @@ describes what happened and never loses a version.
 from __future__ import annotations
 
 import json
-from dataclasses import replace
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
-from langharness_plugin.registry import PluginDescriptor
 
 SCHEMA = 1
 SECRET_KEY_SUFFIXES = ("api_key", "token", "secret", "password")
@@ -74,16 +72,20 @@ def clean_config(plugins: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
-def apply_overrides(
-    descriptor: PluginDescriptor, override: dict[str, Any]
-) -> PluginDescriptor:
-    """Merge one stored config entry into the descriptor built by code."""
-    enabled = override.get("enabled", descriptor.enabled)
-    properties = dict(descriptor.properties)
+def merge_overrides(
+    defaults: Mapping[str, Any], override: Mapping[str, Any]
+) -> tuple[bool, dict[str, Any]]:
+    """Merge one stored config entry into code-built property defaults.
+
+    Returns (enabled, properties): enabled defaults to True; stored
+    properties override defaults key by key.
+    """
+    enabled = bool(override.get("enabled", True))
+    properties = dict(defaults)
     stored = override.get("properties")
     if isinstance(stored, dict):
         properties.update(stored)
-    return replace(descriptor, enabled=bool(enabled), properties=properties)
+    return enabled, properties
 
 
 class PluginConfigStore:

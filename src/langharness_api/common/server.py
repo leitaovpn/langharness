@@ -8,79 +8,25 @@ from typing import cast
 
 from fastapi import FastAPI
 
+from langharness.bootstrap import (
+    DEFAULT_PACKAGE_PATHS,
+    _assembly_requests,
+    load_package,
+)
 from langharness_api.contracts import SPEC_API_SERVER
-from langharness_api.plugin import (
-    api_agents_descriptor,
-    api_auth_descriptor,
-    api_db_descriptor,
-    api_health_descriptor,
-    api_plugins_descriptor,
-    api_rate_limit_descriptor,
-    api_server_descriptor,
-    api_sessions_descriptor,
-    api_stream_descriptor,
-)
-from langharness_config.plugin import config_descriptors
 from langharness_core.contracts import SPEC_AGENT_DIRECTORY
-from langharness_core.plugin import (
-    DEFAULT_AGENT_PLUGINS,
-    agent_directory_descriptor,
-    agent_loop_template_descriptor,
-    agent_plugin_template_descriptor,
-    agent_registry_descriptor,
-    session_index_descriptor,
-    sqlite_checkpointer_descriptor,
-    tool_export_adapter_template_descriptor,
-)
-from langharness_logging.plugin import log_descriptor
-from langharness_plugin.config_store import (
-    agent_scope_configs,
-    apply_overrides,
-    load_overrides,
-)
+from langharness_plugin.config_store import agent_scope_configs
 from langharness_plugin.contracts import DynamicPluginManager
 from langharness_plugin.coordinator import RuntimeMutationCoordinator
 from langharness_plugin.discovery import PluginDiscovery
 from langharness_plugin.plugin_manager import PluginManager
-from langharness_plugin.registry import PluginDescriptor, PluginRegistry
-from langharness_plugin.state_store import SqliteRuntimeStateStore
+from langharness_plugin.registry import PluginRegistry
+from langharness_plugin.state_store import (
+    SqlitePluginHistoryStore,
+    SqliteRuntimeStateStore,
+)
 
 _MANAGER: PluginManager | None = None
-
-
-def _api_descriptors(
-    directory: str, agent_templates: list[PluginDescriptor]
-) -> list[PluginDescriptor]:
-    """Code descriptors with the stored api-scope overrides merged in."""
-    overrides = load_overrides(directory, "api")
-    descriptors = (
-        config_descriptors(directory)
-        + [log_descriptor("server", directory)]
-        + agent_templates
-        + [
-            agent_loop_template_descriptor(),
-            tool_export_adapter_template_descriptor(),
-            agent_registry_descriptor(directory),
-            agent_directory_descriptor(),
-            session_index_descriptor(directory),
-            api_auth_descriptor(),
-            api_rate_limit_descriptor(),
-            api_db_descriptor(),
-            api_health_descriptor(),
-            sqlite_checkpointer_descriptor(directory),
-            api_agents_descriptor(),
-            api_sessions_descriptor(),
-            api_stream_descriptor(),
-            api_plugins_descriptor(directory),
-            api_server_descriptor(),
-        ]
-    )
-    return [
-        apply_overrides(descriptor, overrides[descriptor.name])
-        if descriptor.name in overrides
-        else descriptor
-        for descriptor in descriptors
-    ]
 
 
 def _apply_agent_configs(manager: PluginManager, directory: str) -> None:
@@ -101,26 +47,51 @@ def create_app() -> FastAPI:
         directory = os.environ.get(
             "LANG_HARNESS_DIR", str(Path.home() / ".langharness")
         )
-        agent_templates = [
-            agent_plugin_template_descriptor(plugin)
-            for plugin in dict.fromkeys(("llm", *DEFAULT_AGENT_PLUGINS))
+        packages = [
+            load_package(
+                path, config_dir=directory, section=f"plugins.{role}"
+            )
+            for role, path in (
+                ("config", DEFAULT_PACKAGE_PATHS["config"]),
+                ("server", DEFAULT_PACKAGE_PATHS["server"]),
+                ("agent", DEFAULT_PACKAGE_PATHS["agent"]),
+                ("log", DEFAULT_PACKAGE_PATHS["log"]),
+            )
         ]
-        registry = PluginRegistry(
-            _api_descriptors(directory, agent_templates)
+        requests = _assembly_requests(
+            packages,
+            config_dir=directory,
+            locale="en",
+            override_scope="api",
+            base_url="http://127.0.0.1:11534",
         )
-        manager = PluginManager(registry)
+        manager = PluginManager(PluginRegistry())
         manager.start()
-        coordinator = RuntimeMutationCoordinator(
-            manager,
-            SqliteRuntimeStateStore(Path(directory) / "runtime_state.sqlite3"),
-            PluginDiscovery(),
+        state_path = Path(directory) / "runtime_state.sqlite3"
+        manager.bind_state(
+            SqliteRuntimeStateStore(state_path),
+            SqlitePluginHistoryStore(state_path),
         )
+        coordinator = RuntimeMutationCoordinator(manager, discovery=PluginDiscovery())
         manager.register_runtime_service(DynamicPluginManager, coordinator)
-        for descriptor in registry.list():
-            manager.install_plugin(descriptor)
+        manager.discover()
         coordinator.rescan()
         coordinator.restore()
         _apply_agent_configs(manager, directory)
+        installed: set[tuple[str, str]] = set()
+        for request in requests:
+            key = (request.descriptor.module, request.descriptor.factory)
+            if key not in installed:
+                manager.install_descriptor(request.descriptor, source="assembly")
+                installed.add(key)
+        for request in requests:
+            manager.ensure_instance(
+                request.descriptor.factory,
+                request.descriptor.module,
+                request.scope_id,
+                properties=request.properties,
+                enabled=request.enabled,
+            )
         _MANAGER = manager
 
     assert _MANAGER is not None

@@ -13,12 +13,14 @@ from langharness_cli.common.interactive import InteractiveCLIRunner
 from langharness_cli.common.runner import CLIRunner
 from langharness_cli.common.session import DEFAULT_USER_ID, resolve_identity
 from langharness_cli.contracts import SPEC_CLI_COMMAND, SPEC_CLI_RENDERER
+from langharness_cli.plugin import builtin_package as cli_builtin_package
 from langharness_cli.plugin import cli_descriptors
 from langharness_config.contracts import SPEC_CONFIGS
+from langharness_config.plugin import builtin_package as config_builtin_package
 from langharness_config.plugin import config_descriptors
 from langharness_logging.contracts import SPEC_LOG
+from langharness_logging.plugin import builtin_package as log_builtin_package
 from langharness_logging.plugin import log_descriptor
-from langharness_plugin.config_store import apply_overrides, load_overrides
 from langharness_plugin.plugin_manager import PluginManager
 from langharness_plugin.registry import PluginDescriptor, PluginRegistry
 
@@ -79,29 +81,42 @@ def main(
     directory = str(Path(options.dir).expanduser().resolve())
     inherited_directory = os.environ.get("LANG_HARNESS_DIR")
     os.environ["LANG_HARNESS_DIR"] = directory
-    overrides = load_overrides(directory, "cli")
     selected_descriptors = descriptors or (
-        config_descriptors(directory)
-        + [log_descriptor("cli", directory)]
-        + cli_descriptors(locale)
+        config_descriptors() + [log_descriptor()] + cli_descriptors()
     )
-    registry = PluginRegistry(
-        [
-            apply_overrides(descriptor, overrides[descriptor.name])
-            if descriptor.name in overrides
-            else descriptor
-            for descriptor in selected_descriptors
-        ]
-    )
-    active_manager = manager or PluginManager(registry)
+    active_manager = manager or PluginManager(PluginRegistry(selected_descriptors))
     owns_manager = manager is None
     if owns_manager:
         active_manager.start()
-    try:
-        if owns_manager:
-            for descriptor in registry.list():
-                active_manager.install_plugin(descriptor)
+        from langharness.bootstrap import _assembly_requests
 
+        requests = _assembly_requests(
+            [
+                config_builtin_package(),
+                cli_builtin_package(),
+                log_builtin_package(),
+            ],
+            config_dir=directory,
+            locale=locale,
+            override_scope="cli",
+            base_url=base_url or "http://127.0.0.1:11534",
+        )
+        installed_keys: set[tuple[str, str]] = set()
+        for request in requests:
+            key = (request.descriptor.module, request.descriptor.factory)
+            if key not in installed_keys:
+                active_manager.install_descriptor(request.descriptor)
+                installed_keys.add(key)
+        for request in requests:
+            active_manager.create_instance(
+                request.descriptor.factory,
+                request.descriptor.module,
+                request.scope_id,
+                properties=request.properties,
+                enabled=request.enabled,
+            )
+
+    try:
         providers = active_manager.get_services(SPEC_CLI_COMMAND)
         get_service = getattr(active_manager, "get_service", lambda specification: None)
         configs = get_service(SPEC_CONFIGS)

@@ -275,24 +275,24 @@ def test_plugins_lists_runtime_plugins_across_all_scopes(
             {
                 "plugins": [
                     {
-                        "name": "api-server",
+                        "factory": "api-factory",
+                        "instance": "uuid-1",
                         "package_id": "builtin.api",
                         "contribution_id": "server",
-                        "version": "1.0.0",
+                        "package_version": "1.0.0",
                         "scope_id": "agent:a",
                         "enabled": True,
                         "status": "installed",
-                        "specification": "api.server",
                     },
                     {
-                        "name": "api-web",
+                        "factory": "api-web",
+                        "instance": "uuid-2",
                         "package_id": "builtin.api",
                         "contribution_id": "ui",
-                        "version": "1.0.0",
+                        "package_version": "1.0.0",
                         "scope_id": "ui",
                         "enabled": True,
                         "status": "installed",
-                        "specification": "api.server",
                     },
                 ]
             }
@@ -304,10 +304,11 @@ def test_plugins_lists_runtime_plugins_across_all_scopes(
     output = capsys.readouterr().out
     assert "Runtime plugins · all scopes" in output
     assert "Scope" in output
-    assert "api-server" in output
+    assert "api-factory" in output
     assert "agent:a" in output
     assert "api-web" in output
     assert "builtin.api/server" in output
+    assert "uuid-1" in output
     assert captured["url"].endswith("/plugins/runtime")
     assert captured["params"] is None
 

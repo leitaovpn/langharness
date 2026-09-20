@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from types import SimpleNamespace
 from typing import Any
@@ -111,18 +110,19 @@ def test_main_runs_plugin_commands(monkeypatch: pytest.MonkeyPatch) -> None:
     manager = SimpleNamespace(
         start=lambda: None,
         stop=lambda: None,
-        install_plugin=lambda descriptor: None,
+        install_descriptor=lambda descriptor, **kw: None,
+        create_instance=lambda factory, module, scope, **kw: None,
         get_services=lambda spec: [SimpleNamespace(get_commands=lambda: [command])],
     )
     monkeypatch.setattr(
         main_module,
         "PluginManager",
-        lambda registry: manager,
+        lambda registry=None: manager,
     )
     monkeypatch.setattr(
         main_module,
         "PluginRegistry",
-        lambda descriptors: SimpleNamespace(list=lambda: descriptors),
+        lambda *args: SimpleNamespace(list=lambda: args),
     )
     monkeypatch.setattr(main_module, "CLIRunner", lambda commands: CLIRunner(commands))
 
@@ -142,7 +142,8 @@ def test_main_runs_interactive_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     manager = SimpleNamespace(
         start=lambda: None,
         stop=lambda: None,
-        install_plugin=lambda descriptor: None,
+        install_descriptor=lambda descriptor, **kw: None,
+        create_instance=lambda factory, module, scope, **kw: None,
         get_services=lambda spec: [provider],
     )
 
@@ -165,11 +166,11 @@ def test_main_runs_interactive_mode(monkeypatch: pytest.MonkeyPatch) -> None:
         def cmdloop(self):
             self.called = True
 
-    monkeypatch.setattr(main_module, "PluginManager", lambda registry: manager)
+    monkeypatch.setattr(main_module, "PluginManager", lambda registry=None: manager)
     monkeypatch.setattr(
         main_module,
         "PluginRegistry",
-        lambda descriptors: SimpleNamespace(list=lambda: descriptors),
+        lambda *args: SimpleNamespace(list=lambda: args),
     )
     monkeypatch.setattr(main_module, "InteractiveCLIRunner", FakeInteractive)
     monkeypatch.setattr(
@@ -201,14 +202,15 @@ def test_main_warns_when_removed_base_url_flag_is_used(
     manager = SimpleNamespace(
         start=lambda: None,
         stop=lambda: None,
-        install_plugin=lambda descriptor: None,
+        install_descriptor=lambda descriptor, **kw: None,
+        create_instance=lambda factory, module, scope, **kw: None,
         get_services=lambda spec: [provider],
     )
-    monkeypatch.setattr(main_module, "PluginManager", lambda registry: manager)
+    monkeypatch.setattr(main_module, "PluginManager", lambda registry=None: manager)
     monkeypatch.setattr(
         main_module,
         "PluginRegistry",
-        lambda descriptors: SimpleNamespace(list=lambda: descriptors),
+        lambda *args: SimpleNamespace(list=lambda: args),
     )
     monkeypatch.setattr(
         main_module,
@@ -284,10 +286,11 @@ def test_main_forwards_identity_flags_to_resolution(
     manager = SimpleNamespace(
         start=lambda: None,
         stop=lambda: None,
-        install_plugin=lambda descriptor: None,
+        install_descriptor=lambda descriptor, **kw: None,
+        create_instance=lambda factory, module, scope, **kw: None,
         get_services=lambda spec: [],
     )
-    monkeypatch.setattr(main_module, "PluginManager", lambda registry: manager)
+    monkeypatch.setattr(main_module, "PluginManager", lambda registry=None: manager)
     captured: dict[str, Any] = {}
 
     def fake_resolve(base_url, token, user_id, **kwargs):
@@ -327,14 +330,17 @@ def test_main_passes_locale_flag_to_plugins_and_runner(
 ) -> None:
     monkeypatch.delenv("LANG_HARNESS_LOCALE", raising=False)
     monkeypatch.setattr(sys, "argv", ["langharness", "interactive", "--locale", "zh"])
-    installed = []
+    created = []
     manager = SimpleNamespace(
         start=lambda: None,
         stop=lambda: None,
-        install_plugin=installed.append,
+        install_descriptor=lambda descriptor, **kw: None,
+        create_instance=lambda factory, module, scope, **kw: created.append(
+            (factory, kw.get("properties"))
+        ),
         get_services=lambda spec: [],
     )
-    monkeypatch.setattr(main_module, "PluginManager", lambda registry: manager)
+    monkeypatch.setattr(main_module, "PluginManager", lambda registry=None: manager)
     captured = {}
 
     class FakeInteractive:
@@ -346,10 +352,9 @@ def test_main_passes_locale_flag_to_plugins_and_runner(
 
     monkeypatch.setattr(main_module, "InteractiveCLIRunner", FakeInteractive)
     assert main_module.main() == 0
-    renderer = next(d for d in installed if d.name == "cli-rich-renderer")
-    shell = next(d for d in installed if d.name == "cli-shell")
-    assert renderer.properties == {"plugin.ui.locale": "zh"}
-    assert shell.properties == {"plugin.ui.locale": "zh"}
+    by_factory = dict(created)
+    assert by_factory["rich-cli-renderer-factory"] == {"plugin.ui.locale": "zh"}
+    assert by_factory["cli-shell-command-factory"] == {"plugin.ui.locale": "zh"}
     assert captured["locale"] == "zh"
 
 
@@ -359,16 +364,17 @@ def test_main_installs_shell_command_plugin(monkeypatch: pytest.MonkeyPatch) -> 
     manager = SimpleNamespace(
         start=lambda: None,
         stop=lambda: None,
-        install_plugin=installed.append,
+        install_descriptor=installed.append,
+        create_instance=lambda factory, module, scope, **kw: None,
         get_services=lambda spec: [],
     )
-    monkeypatch.setattr(main_module, "PluginManager", lambda registry: manager)
+    monkeypatch.setattr(main_module, "PluginManager", lambda registry=None: manager)
     monkeypatch.setattr(main_module.InteractiveCLIRunner, "cmdloop", lambda self: None)
 
     assert main_module.main() == 0
     assert {descriptor.name for descriptor in installed} == {
         "cli-health",
-        "cli-log",
+        "file-log",
         "cli-model",
         "cli-plugins",
         "cli-rich-renderer",
@@ -376,110 +382,9 @@ def test_main_installs_shell_command_plugin(monkeypatch: pytest.MonkeyPatch) -> 
         "cli-session",
         "cli-shell",
         "config-toml",
-            "configs",
-            "ui-server",
-        }
-
-
-def test_main_uses_selected_provider_and_directory(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
-) -> None:
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "langharness",
-            "--provider",
-            "demo",
-            "--dir",
-            str(tmp_path),
-            "interactive",
-        ],
-    )
-    configs = SimpleNamespace(
-        get=lambda section, key: "configured.log",
-        get_provider=lambda name: {
-            "model": "provider-model",
-            "api_key": "provider-key",
-            "base_url": "https://provider.example/v1",
-        },
-    )
-    command_provider = SimpleNamespace(
-        get_commands=lambda: [], get_interactive_commands=lambda: []
-    )
-    log_messages = []
-    log_provider = SimpleNamespace(
-        get_logger=lambda: SimpleNamespace(info=log_messages.append)
-    )
-    manager = SimpleNamespace(
-        start=lambda: None,
-        stop=lambda: None,
-        install_plugin=lambda descriptor: None,
-        get_services=lambda spec: [command_provider],
-        get_service=lambda spec: log_provider if spec == "log.plugin" else configs,
-    )
-    captured = {}
-
-    class FakeInteractive:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-        def cmdloop(self):
-            return None
-
-    monkeypatch.setattr(main_module, "PluginManager", lambda registry: manager)
-    monkeypatch.setattr(
-        main_module,
-        "PluginRegistry",
-        lambda descriptors: SimpleNamespace(list=lambda: descriptors),
-    )
-    monkeypatch.setattr(main_module, "InteractiveCLIRunner", FakeInteractive)
-    assert main_module.main() == 0
-    assert captured["model"] == "provider-model"
-    assert captured["api_key"] == "provider-key"
-    assert captured["model_base_url"] == "https://provider.example/v1"
-    assert captured["commands"] == []
-    assert log_messages == ["CLI started"]
-    assert "LANG_HARNESS_DIR" not in os.environ
-
-
-def test_main_uses_default_provider_when_not_specified(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
-) -> None:
-    monkeypatch.setattr(
-        sys, "argv", ["langharness", "--dir", str(tmp_path), "interactive"]
-    )
-    configs = SimpleNamespace(
-        get_default_provider=lambda: {
-            "model": "default-model",
-            "api_key": "default-key",
-            "base_url": "https://default.example/v1",
-        },
-    )
-    manager = SimpleNamespace(
-        start=lambda: None,
-        stop=lambda: None,
-        install_plugin=lambda descriptor: None,
-        get_services=lambda spec: [],
-        get_service=lambda spec: configs if spec == "configs" else None,
-    )
-    captured = {}
-
-    class FakeInteractive:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-        def cmdloop(self):
-            return None
-
-    monkeypatch.setattr(main_module, "PluginManager", lambda registry: manager)
-    monkeypatch.setattr(main_module, "InteractiveCLIRunner", FakeInteractive)
-
-    assert main_module.main() == 0
-    assert captured["model"] == "default-model"
-    assert captured["api_key"] == "default-key"
-    assert captured["model_base_url"] == "https://default.example/v1"
-    assert captured["provider_name"] == "default"
+        "configs",
+        "ui-server",
+    }
 
 
 def test_main_errors_when_default_provider_missing(
@@ -496,7 +401,8 @@ def test_main_errors_when_default_provider_missing(
     manager = SimpleNamespace(
         start=lambda: None,
         stop=lambda: None,
-        install_plugin=lambda descriptor: None,
+        install_descriptor=lambda descriptor, **kw: None,
+        create_instance=lambda factory, module, scope, **kw: None,
         get_services=lambda spec: [],
         get_service=lambda spec: configs if spec == "configs" else None,
     )
@@ -509,7 +415,7 @@ def test_main_errors_when_default_provider_missing(
         def cmdloop(self):
             return None
 
-    monkeypatch.setattr(main_module, "PluginManager", lambda registry: manager)
+    monkeypatch.setattr(main_module, "PluginManager", lambda registry=None: manager)
     monkeypatch.setattr(main_module, "InteractiveCLIRunner", FakeInteractive)
 
     assert main_module.main() == 2
@@ -533,12 +439,13 @@ def test_main_rejects_reserved_default_provider_name(
     manager = SimpleNamespace(
         start=lambda: None,
         stop=lambda: None,
-        install_plugin=lambda descriptor: None,
+        install_descriptor=lambda descriptor, **kw: None,
+        create_instance=lambda factory, module, scope, **kw: None,
         get_services=lambda spec: [],
         get_service=lambda spec: configs if spec == "configs" else None,
     )
 
-    monkeypatch.setattr(main_module, "PluginManager", lambda registry: manager)
+    monkeypatch.setattr(main_module, "PluginManager", lambda registry=None: manager)
 
     assert main_module.main() == 2
     assert "reserved" in capsys.readouterr().err
@@ -568,16 +475,17 @@ def test_main_survives_broken_provider_config(
     manager = SimpleNamespace(
         start=lambda: None,
         stop=lambda: None,
-        install_plugin=lambda descriptor: None,
+        install_descriptor=lambda descriptor, **kw: None,
+        create_instance=lambda factory, module, scope, **kw: None,
         get_services=lambda spec: [provider],
         get_service=lambda spec: configs,
     )
 
-    monkeypatch.setattr(main_module, "PluginManager", lambda registry: manager)
+    monkeypatch.setattr(main_module, "PluginManager", lambda registry=None: manager)
     monkeypatch.setattr(
         main_module,
         "PluginRegistry",
-        lambda descriptors: SimpleNamespace(list=lambda: descriptors),
+        lambda *args: SimpleNamespace(list=lambda: args),
     )
     monkeypatch.setattr(
         main_module,

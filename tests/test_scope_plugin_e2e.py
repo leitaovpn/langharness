@@ -11,10 +11,16 @@ from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
 from langharness_core.contracts import SPEC_AGENT_LOOP, SPEC_LLM, SPEC_TOOL
-from langharness_core.plugin import agent_loop_descriptor
+from langharness_core.plugin import agent_loop_descriptor, agent_loop_properties
 from langharness_plugin.plugin_manager import PluginManager
 from langharness_plugin.registry import PluginDescriptor, PluginRegistry
 from langharness_scope import InMemoryScopeStore, ScopeId, ScopeTree
+
+DESCRIPTION = (
+    "Scope e2e test plugin. Implements a test specification. Properties: "
+    "plugin.model.instance or plugin.tools.functions. Requires a restart "
+    "for property changes. Uninstall when tests finish."
+)
 
 
 class ScopeModel(BaseChatModel):
@@ -87,36 +93,17 @@ def template(
         version="1.0.0",
         module=module,
         factory=factory,
-        instance=name,
         specification=specification,
-        enabled=False,
-    )
-
-
-def instance(
-    name: str,
-    module: str,
-    factory: str,
-    specification: str,
-    *,
-    ranking: int = 0,
-    properties: dict[str, Any] | None = None,
-) -> PluginDescriptor:
-    return PluginDescriptor(
-        name=name,
-        version="1.0.0",
-        module=module,
-        factory=factory,
-        instance=name,
-        specification=specification,
-        ranking=ranking,
-        properties=properties or {},
+        description=DESCRIPTION,
     )
 
 
 def test_scope_and_plugin_full_lifecycle_with_best_and_aggregate_shadowing() -> None:
-    registry = PluginRegistry(
-        [
+    scope_store = InMemoryScopeStore()
+    manager = PluginManager(PluginRegistry(), scope_tree=ScopeTree(scope_store))
+    manager.start()
+    try:
+        for item in [
             template(
                 "llm-template",
                 "langharness_core.plugins.llm.llm",
@@ -135,15 +122,9 @@ def test_scope_and_plugin_full_lifecycle_with_best_and_aggregate_shadowing() -> 
                 "agent-loop-factory",
                 SPEC_AGENT_LOOP,
             ),
-        ]
-    )
-    scope_store = InMemoryScopeStore()
-    manager = PluginManager(registry, scope_tree=ScopeTree(scope_store))
-    manager.start()
-    try:
-        for descriptor in registry.list():
-            manager.install_plugin(descriptor)
-        manager.ensure_scope(
+        ]:
+            manager.install_descriptor(item)
+        manager.add_scope(
             ScopeId("session"), name="Session", parent_id=ScopeId("agent")
         )
         restored = ScopeTree(scope_store)
@@ -152,56 +133,43 @@ def test_scope_and_plugin_full_lifecycle_with_best_and_aggregate_shadowing() -> 
             ScopeId("root"),
         ]
 
-        manager.instantiate_instance(
-            instance(
-                "llm@root",
-                "langharness_core.plugins.llm.llm",
-                "llm-plugin-factory",
-                SPEC_LLM,
-                ranking=999,
-                properties={"plugin.model.instance": ScopeModel(label="root")},
-            ),
-            scope_id=ScopeId("root"),
-            plugin_key="llm",
+        manager.create_instance(
+            "llm-plugin-factory",
+            "langharness_core.plugins.llm.llm",
+            ScopeId("root"),
+            ranking=999,
+            properties={"plugin.model.instance": ScopeModel(label="root")},
         )
         agent_model = ScopeModel(label="agent")
-        manager.instantiate_instance(
-            instance(
-                "llm@agent",
-                "langharness_core.plugins.llm.llm",
-                "llm-plugin-factory",
-                SPEC_LLM,
-                ranking=1,
-                properties={"plugin.model.instance": agent_model},
-            ),
-            scope_id=ScopeId("agent"),
-            plugin_key="llm",
+        manager.create_instance(
+            "llm-plugin-factory",
+            "langharness_core.plugins.llm.llm",
+            ScopeId("agent"),
+            ranking=1,
+            properties={"plugin.model.instance": agent_model},
         )
-        for name, scope, key, function in [
-            ("shared@root", "root", "shared", root_shared),
-            ("other@root", "root", "other", root_other),
-            ("shared@agent", "agent", "shared", agent_shared),
-        ]:
-            manager.instantiate_instance(
-                instance(
-                    name,
-                    "langharness_core.plugins.tools.tools",
-                    "tools-plugin-factory",
-                    SPEC_TOOL,
-                    properties={"plugin.tools.functions": [function]},
-                ),
-                scope_id=ScopeId(scope),
-                plugin_key=key,
-            )
+        manager.create_instance(
+            "tools-plugin-factory",
+            "langharness_core.plugins.tools.tools",
+            ScopeId("root"),
+            properties={"plugin.tools.functions": [root_shared]},
+        )
+        agent_tools = manager.create_instance(
+            "tools-plugin-factory",
+            "langharness_core.plugins.tools.tools",
+            ScopeId("agent"),
+            properties={"plugin.tools.functions": [agent_shared]},
+        )
 
         visible = manager.scope_filter(ScopeId("session"))
-        loop_descriptor = agent_loop_descriptor(
-            "session", [SPEC_LLM, SPEC_TOOL], visibility_filter=visible
-        )
-        manager.instantiate_instance(
-            loop_descriptor,
-            scope_id=ScopeId("session"),
-            plugin_key="agent-loop",
+        loop_descriptor = agent_loop_descriptor()
+        manager.create_instance(
+            loop_descriptor.factory,
+            loop_descriptor.module,
+            ScopeId("session"),
+            properties=agent_loop_properties(
+                "session", [SPEC_LLM, SPEC_TOOL], visibility_filter=visible
+            ),
         )
         loop = manager.find_service(
             SPEC_AGENT_LOOP, "(plugin.scope_id=session)"
@@ -214,14 +182,14 @@ def test_scope_and_plugin_full_lifecycle_with_best_and_aggregate_shadowing() -> 
         ] == [("agent", 1_000_001), ("root", 999)]
         assert manager.find_service(SPEC_LLM, visible).get_model() is agent_model
         assert loop._llm_provider.get_model() is agent_model, llm_properties
+        # Same factory instances shadow each other per nearest scope: the
+        # loop's aggregate sees only the agent instance.
         assert [tool.name for tool in loop._collect_tools()] == [
             "agent_shared",
-            "root_other",
         ], (loop._scope_chain, loop._service_metadata)
 
-        manager.kill_instance("shared@agent")
+        manager.delete_instance(agent_tools.instance)
         assert [tool.name for tool in loop._collect_tools()] == [
-            "root_other",
             "root_shared",
         ]
 
@@ -231,17 +199,23 @@ def test_scope_and_plugin_full_lifecycle_with_best_and_aggregate_shadowing() -> 
         assert manager.find_service(
             SPEC_AGENT_LOOP, "(plugin.scope_id=session)"
         ) is None
-        assert set(manager.scoped_instances()) == {
-            "llm@root",
-            "shared@root",
-            "other@root",
+        assert {item.factory for item in manager.list_instance()} == {
+            "llm-plugin-factory",
+            "tools-plugin-factory",
+        }
+        remaining = {
+            (item.factory, str(item.scope_id)) for item in manager.list_instance()
+        }
+        assert remaining == {
+            ("llm-plugin-factory", "root"),
+            ("tools-plugin-factory", "root"),
         }
 
-        for name in tuple(manager.scoped_instances()):
-            manager.kill_instance(name)
-        for name in tuple(manager.installed_names()):
-            manager.uninstall_plugin(name)
-        assert manager.installed_names() == set()
+        for snapshot in tuple(manager.list_instance()):
+            manager.delete_instance(snapshot.instance)
+        for plugin in tuple(manager.list_plugin()):
+            manager.uninstall_plugin(plugin.descriptor.factory)
+        assert manager.list_plugin() == ()
         assert manager.installed_modules() == set()
     finally:
         manager.stop()
@@ -254,16 +228,12 @@ def test_runtime_scope_visibility_matrix_with_real_service_registry() -> None:
         "tools-plugin-factory",
         SPEC_TOOL,
     )
-    manager = PluginManager(PluginRegistry([tools_template]))
+    manager = PluginManager(PluginRegistry())
     manager.start()
     try:
-        manager.install_plugin(tools_template)
-        manager.ensure_scope(
-            ScopeId("agent:a"), name="A", parent_id=ScopeId("agent")
-        )
-        manager.ensure_scope(
-            ScopeId("agent:b"), name="B", parent_id=ScopeId("agent")
-        )
+        manager.install_descriptor(tools_template)
+        manager.add_scope(ScopeId("agent:a"), name="A", parent_id=ScopeId("agent"))
+        manager.add_scope(ScopeId("agent:b"), name="B", parent_id=ScopeId("agent"))
         registrations = [
             ("root", root_other),
             ("ui", ui_tool),
@@ -273,16 +243,11 @@ def test_runtime_scope_visibility_matrix_with_real_service_registry() -> None:
             ("agent:b", agent_b_tool),
         ]
         for scope, function in registrations:
-            manager.instantiate_instance(
-                instance(
-                    f"visibility@{scope}",
-                    "langharness_core.plugins.tools.tools",
-                    "tools-plugin-factory",
-                    SPEC_TOOL,
-                    properties={"plugin.tools.functions": [function]},
-                ),
-                scope_id=ScopeId(scope),
-                plugin_key=f"visibility-{scope}",
+            manager.create_instance(
+                "tools-plugin-factory",
+                "langharness_core.plugins.tools.tools",
+                ScopeId(scope),
+                properties={"plugin.tools.functions": [function]},
             )
 
         def visible(scope: str) -> set[str]:

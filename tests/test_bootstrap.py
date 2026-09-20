@@ -130,7 +130,7 @@ def test_config_entry_point_discovery_success_and_failures(
     )
 
 
-def test_descriptors_retarget_persistent_paths_and_locale(
+def test_assembly_requests_retarget_persistent_paths_and_locale(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     from langharness_api.plugin import builtin_package as api_package
@@ -138,14 +138,14 @@ def test_descriptors_retarget_persistent_paths_and_locale(
     from langharness_core.plugin import builtin_package as agent_package
     from langharness_logging.plugin import builtin_package as log_package
 
-    descriptors = bootstrap_module._descriptors(
+    requests = bootstrap_module._assembly_requests(
         [config_package(), ui_package(), api_package(), agent_package(), log_package()],
         config_dir=str(tmp_path),
         locale="zh",
         override_scope="api",
         base_url="http://10.0.0.1:4321",
     )
-    by_name = {descriptor.name: descriptor for descriptor in descriptors}
+    by_name = {request.name: request for request in requests}
 
     assert by_name["config-toml"].properties["plugin.config.path"] == str(
         tmp_path / "langharness.toml"
@@ -166,6 +166,8 @@ def test_descriptors_retarget_persistent_paths_and_locale(
     assert (
         by_name["cli-plugins"].properties["plugin.base_url"] == "http://10.0.0.1:4321"
     )
+    # The api scope never assembles the cli log instance.
+    assert "cli-log" not in by_name
 
     monkeypatch_overrides = {"configs": {"enabled": False}}
     monkeypatch.setattr(
@@ -173,19 +175,18 @@ def test_descriptors_retarget_persistent_paths_and_locale(
         "load_overrides",
         lambda directory, scope: monkeypatch_overrides,
     )
-    duplicate_descriptors = bootstrap_module._descriptors(
+    duplicate_requests = bootstrap_module._assembly_requests(
         [config_package(), config_package()],
         config_dir=str(tmp_path),
         locale="en",
         override_scope="api",
         base_url="http://127.0.0.1:11534",
     )
-    assert len(duplicate_descriptors) == 2
-    configs = next(item for item in duplicate_descriptors if item.name == "configs")
+    configs = next(item for item in duplicate_requests if item.name == "configs")
     assert configs.enabled is False
 
 
-def test_descriptors_launcher_base_url_beats_stored_overrides(
+def test_assembly_requests_launcher_base_url_beats_stored_overrides(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     from langharness_cli.plugin import builtin_package as ui_package
@@ -194,17 +195,20 @@ def test_descriptors_launcher_base_url_beats_stored_overrides(
         bootstrap_module,
         "load_overrides",
         lambda directory, scope: {
-            "cli-health": {"plugin.base_url": "http://override:1"}
+            "cli-health": {
+                "enabled": True,
+                "properties": {"plugin.base_url": "http://override:1"},
+            }
         },
     )
-    descriptors = bootstrap_module._descriptors(
+    requests = bootstrap_module._assembly_requests(
         [config_package(), ui_package()],
         config_dir=str(tmp_path),
         locale="en",
         override_scope="cli",
         base_url="http://launcher:2",
     )
-    by_name = {descriptor.name: descriptor for descriptor in descriptors}
+    by_name = {request.name: request for request in requests}
 
     assert by_name["cli-health"].properties["plugin.base_url"] == "http://launcher:2"
 
@@ -233,7 +237,8 @@ def test_select_packages_requires_configs_service(
     manager = SimpleNamespace(
         start=lambda: None,
         stop=lambda: None,
-        install_plugin=lambda descriptor: None,
+        install_descriptor=lambda descriptor, **kwargs: None,
+        create_instance=lambda factory, module, scope, **kwargs: None,
         get_service=lambda specification: None,
     )
     monkeypatch.setattr(bootstrap_module, "PluginManager", lambda registry: manager)

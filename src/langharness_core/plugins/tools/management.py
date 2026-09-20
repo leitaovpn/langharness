@@ -97,14 +97,15 @@ class UpdatePropertiesArgs(NameScopeArgs):
 def _registration_summary(registration: Any) -> dict[str, Any]:
     """Safe registration view; never serializes embedded service objects."""
     return {
-        "name": registration.descriptor.name,
         "package_id": registration.package_id,
         "contribution_id": registration.contribution_id,
-        "version": registration.package_version,
+        "package_version": registration.package_version,
+        "instance": registration.instance,
+        "factory": registration.factory,
+        "module": registration.module,
         "scope_id": str(registration.scope_id),
         "enabled": registration.enabled,
         "status": registration.status,
-        "specification": registration.descriptor.specification,
     }
 
 

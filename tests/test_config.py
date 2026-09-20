@@ -13,6 +13,7 @@ from langharness_config.plugins.configs import ConfigsPlugin
 from langharness_config.plugins.toml import TOMLConfigPlugin
 from langharness_plugin.plugin_manager import PluginManager
 from langharness_plugin.registry import PluginRegistry
+from langharness_scope import ROOT_SCOPE_ID
 
 
 def test_toml_config_plugin_creates_and_reads_user_config(tmp_path: Path) -> None:
@@ -137,11 +138,22 @@ def test_configs_service_aggregates_toml_plugin_in_ipopo(tmp_path: Path) -> None
         'model = "default-model"\napi_key = "k"\n',
         encoding="utf-8",
     )
-    manager = PluginManager(PluginRegistry(config_descriptors(str(tmp_path))))
+    manager = PluginManager(PluginRegistry())
     manager.start()
     try:
-        for descriptor in manager.registry.list():
-            manager.install_plugin(descriptor)
+        for descriptor in config_descriptors():
+            manager.install_descriptor(descriptor)
+        manager.create_instance(
+            "toml-config-plugin-factory",
+            "langharness_config.plugins.toml",
+            ROOT_SCOPE_ID,
+            properties={"plugin.config.path": str(tmp_path / "langharness.toml")},
+        )
+        manager.create_instance(
+            "configs-plugin-factory",
+            "langharness_config.plugins.configs",
+            ROOT_SCOPE_ID,
+        )
         configs = manager.get_service(SPEC_CONFIGS)
         assert configs is not None
         assert configs.get_default_provider()["model"] == "default-model"

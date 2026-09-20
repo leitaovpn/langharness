@@ -1,293 +1,294 @@
-"""Dynamic plugin package discovery and validation."""
+"""Tests for class-based descriptor discovery and package validation."""
+# mypy: ignore-errors
+# pyright: reportArgumentType=false, reportAttributeAccessIssue=false, reportOptionalMemberAccess=false
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
-
 import pytest
-from pydantic import BaseModel
 
-from langharness_api.plugin import builtin_package as api_builtin_package
-from langharness_cli.plugin import builtin_package as cli_builtin_package
-from langharness_config.plugin import builtin_package as config_builtin_package
-from langharness_core.plugin import (
-    builtin_package as core_builtin_package,
+from langharness_plugin.discovery import (
+    DiscoveryResult,
+    PluginDiscovery,
+    descriptor_discovery,
 )
-from langharness_core.plugin import (
-    dynamic_package as core_dynamic_package,
+from langharness_plugin.package import PluginContribution, PluginPackage
+from langharness_plugin.registry import plugin_metadata, validate_descriptor
+
+
+class EntryPoint:
+    """Minimal fake matching the loader contract used by discovery."""
+
+    def __init__(self, target, name: str = "dynamic") -> None:
+        self.target = target
+        self.name = name
+        self.value = f"{name}:load"
+
+    def load(self):
+        return self.target
+
+DESCRIPTION = (
+    "Echoes text. Implements test.echo. Use for round-trip checks. "
+    "No properties. Uninstall when no longer needed."
 )
-from langharness_logging.plugin import builtin_package as logging_builtin_package
-from langharness_plugin.contracts import SPEC_TOOL_EXPORT_TARGET
-from langharness_plugin.discovery import PluginDiscovery, PluginDiscoveryError
-from langharness_plugin.package import PluginContribution, PluginPackage, ToolExport
-from langharness_plugin.registry import PluginDescriptor
 
 
-class EchoArgs(BaseModel):
-    text: str
+@plugin_metadata(
+    name="echo",
+    version="1.0.0",
+    factory="echo-factory",
+    specification="test.echo",
+    description=DESCRIPTION,
+)
+class Echo:
+    pass
 
 
-def descriptor(
-    name: str,
-    *,
-    module: str = "example.plugin",
-    specification: str = SPEC_TOOL_EXPORT_TARGET,
-) -> PluginDescriptor:
-    return PluginDescriptor(
-        name=name,
+@plugin_metadata(
+    name="echo2",
+    version="1.0.0",
+    factory="echo2-factory",
+    specification="test.echo",
+    description=DESCRIPTION,
+    module="wrong.module.path",
+)
+class MismatchedModule:
+    pass
+
+
+@plugin_metadata(
+    name="broken",
+    version="",
+    factory="broken-factory",
+    specification="test.echo",
+    description="",
+)
+class Broken:
+    pass
+
+
+class MissingMetadata:
+    pass
+
+
+def entries(*values):
+    return [EntryPoint(item, f"ep-{index}") for index, item in enumerate(values)]
+
+
+def test_class_entry_point_produces_descriptor() -> None:
+    descriptors, warnings = descriptor_discovery(lambda: entries(Echo))
+    assert len(descriptors) == 1
+    descriptor = descriptors[(Echo.__module__, "echo-factory")]
+    assert descriptor.name == "echo"
+    assert descriptor.module == Echo.__module__
+    validate_descriptor(descriptor)  # must not raise
+
+
+def test_callable_entry_point_returning_class() -> None:
+    descriptors, warnings = descriptor_discovery(lambda: entries(lambda: Echo))
+    assert (Echo.__module__, "echo-factory") in descriptors
+
+
+def test_duplicate_module_factory_first_wins() -> None:
+    other = type("Other", (Echo,), {})
+    descriptors, warnings = descriptor_discovery(lambda: entries(Echo, other))
+    assert len(descriptors) == 1
+    assert any("duplicate" in warning for warning in warnings)
+
+
+def test_module_mismatch_skipped_with_warning() -> None:
+    descriptors, warnings = descriptor_discovery(lambda: entries(MismatchedModule))
+    assert descriptors == {}
+    assert any("module" in warning for warning in warnings)
+
+
+def test_invalid_fields_skipped_with_warning() -> None:
+    descriptors, warnings = descriptor_discovery(lambda: entries(Broken))
+    assert descriptors == {}
+    assert warnings
+
+
+def test_missing_metadata_skipped_with_warning() -> None:
+    descriptors, warnings = descriptor_discovery(lambda: entries(MissingMetadata))
+    assert descriptors == {}
+    assert warnings
+
+
+def test_non_class_callable_result_skipped() -> None:
+    descriptors, warnings = descriptor_discovery(lambda: entries(lambda: 42))
+    assert descriptors == {}
+    assert warnings
+
+
+def test_one_bad_entry_point_does_not_block_others() -> None:
+    descriptors, warnings = descriptor_discovery(lambda: entries(Broken, Echo))
+    assert (Echo.__module__, "echo-factory") in descriptors
+
+
+def static_descriptor(**overrides):
+    fields = dict(
+        name="x",
         version="1.0.0",
-        module=module,
-        factory=f"{name}-factory",
-        instance=name,
-        specification=specification,
-        scope="server",
-        scope_parent="root",
+        module="m",
+        factory="f",
+        specification="s",
+        description=DESCRIPTION,
     )
+    fields.update(overrides)
+    from langharness_plugin.registry import PluginDescriptor
+
+    return PluginDescriptor(**fields)
 
 
-def descriptor_with_instance(name: str, instance: str) -> PluginDescriptor:
-    return PluginDescriptor(
-        name=name,
-        version="1.0.0",
-        module="example.plugin",
-        factory=f"{name}-factory",
-        instance=instance,
-        specification=SPEC_TOOL_EXPORT_TARGET,
-        scope="server",
-        scope_parent="root",
+def test_package_validation_requires_static_descriptor() -> None:
+    package = PluginPackage(
+        "p", "1.0.0", (PluginContribution("c", "server", static_descriptor()),)
     )
+    discovery = PluginDiscovery(lambda: entries(lambda: package))
+    result = discovery.scan()
+    assert isinstance(result, DiscoveryResult)
+    assert result.failures == ()
 
 
-def package(package_id: str = "example.package") -> PluginPackage:
-    return PluginPackage(
-        id=package_id,
-        version="1.0.0",
-        contributions=(
-            PluginContribution(
-                id="echo",
-                target="server",
-                descriptor=descriptor("echo"),
-                tool_exports=(
-                    ToolExport("echo", "Echo text", "echo", EchoArgs),
-                ),
-            ),
+def test_package_catalog_allows_duplicate_names_different_factories() -> None:
+    first = static_descriptor(name="same", module="m.a", factory="f-a")
+    second = static_descriptor(name="same", module="m.b", factory="f-b")
+    package = PluginPackage(
+        "p",
+        "1.0.0",
+        (
+            PluginContribution("a", "server", first),
+            PluginContribution("b", "server", second),
         ),
     )
+    discovery = PluginDiscovery(lambda: entries(lambda: package))
+    result = discovery.scan()
+    assert len(result.packages) == 1
+    assert len(result.packages[0].contributions) == 2
 
 
-@dataclass
-class FakeEntryPoint:
-    name: str
-    value: str
-    loaded: Any
-
-    def load(self) -> Any:
-        if isinstance(self.loaded, Exception):
-            raise self.loaded
-        return self.loaded
-
-
-def builtin_packages() -> tuple[PluginPackage, ...]:
-    return (
-        api_builtin_package(),
-        cli_builtin_package(),
-        config_builtin_package(),
-        core_builtin_package(),
-        logging_builtin_package(),
+def test_package_catalog_allows_same_factory_within_package() -> None:
+    # One package may contribute two install requests over the same
+    # definition: a template install plus an agent-instance request.
+    first = static_descriptor(name="a", module="m", factory="f")
+    second = static_descriptor(name="b", module="m", factory="f")
+    package = PluginPackage(
+        "p",
+        "1.0.0",
+        (
+            PluginContribution("a", "agent", first),
+            PluginContribution("b", "agent_instance", second),
+        ),
     )
+    discovery = PluginDiscovery(lambda: entries(lambda: package))
+    result = discovery.scan()
+    assert len(result.packages) == 1
+    assert len(result.packages[0].contributions) == 2
 
 
-def test_discovers_packages_and_records_broken_entry_points() -> None:
+def test_package_catalog_allows_same_factory_across_packages() -> None:
+    # Two packages may contribute install requests over the same definition
+    # (e.g. a server install plus an agent-instance request); the registry
+    # rejects real identity conflicts at install time.
+    first = static_descriptor(name="a", module="m", factory="f")
+    second = static_descriptor(name="b", module="m", factory="f")
+    package_a = PluginPackage(
+        "p.a", "1.0.0", (PluginContribution("a", "server", first),)
+    )
+    package_b = PluginPackage(
+        "p.b", "1.0.0", (PluginContribution("b", "agent_instance", second),)
+    )
     discovery = PluginDiscovery(
-        lambda: [
-            FakeEntryPoint("ok", "pkg:plugin", lambda: package()),
-            FakeEntryPoint("bad", "broken:plugin", RuntimeError("broken")),
-        ]
+        lambda: entries(lambda: package_a, lambda: package_b)
     )
     result = discovery.scan()
-    assert [item.id for item in result.packages] == ["example.package"]
-    assert result.failures[0].entry_point == "bad"
-    assert "broken" in result.failures[0].detail
+    assert len(result.packages) == 2
+    assert result.failures == ()
 
 
-def test_rejects_duplicate_package_and_contribution_ids() -> None:
-    discovery = PluginDiscovery(
-        lambda: [
-            FakeEntryPoint("one", "one:plugin", lambda: package()),
-            FakeEntryPoint("two", "two:plugin", lambda: package()),
-        ]
-    )
-    with pytest.raises(PluginDiscoveryError, match="Duplicate plugin package"):
+def test_discover_raises_on_failures() -> None:
+    from langharness_plugin.discovery import PluginDiscoveryError
+
+    discovery = PluginDiscovery(lambda: entries(lambda: 42))
+    with pytest.raises(PluginDiscoveryError):
         discovery.discover()
 
-    duplicate = PluginPackage(
-        id="duplicate-contributions",
-        version="1",
-        contributions=(
-            PluginContribution("same", "server", descriptor("one")),
-            PluginContribution("same", "server", descriptor("two")),
+
+def test_scan_reports_non_callable_entry_points() -> None:
+    discovery = PluginDiscovery(lambda: entries(42))
+    result = discovery.scan()
+    assert result.packages == ()
+    assert result.failures
+    assert "callable" in result.failures[0].detail
+
+
+def test_scan_reports_non_package_results() -> None:
+    discovery = PluginDiscovery(lambda: entries(lambda: "not-a-package"))
+    result = discovery.scan()
+    assert result.packages == ()
+    assert result.failures
+
+
+def test_scan_reports_empty_package_identity() -> None:
+    package = PluginPackage("", "", ())
+    discovery = PluginDiscovery(lambda: entries(lambda: package))
+    result = discovery.scan()
+    assert result.failures
+
+
+def test_scan_reports_duplicate_contribution_ids() -> None:
+    package = PluginPackage(
+        "p", "1.0.0",
+        (
+            PluginContribution("dup", "server", static_descriptor(factory="f-a")),
+            PluginContribution("dup", "server", static_descriptor(factory="f-b")),
         ),
     )
-    discovery = PluginDiscovery(
-        lambda: [FakeEntryPoint("duplicate", "pkg:plugin", lambda: duplicate)]
+    discovery = PluginDiscovery(lambda: entries(lambda: package))
+    result = discovery.scan()
+    assert result.failures
+
+
+def test_scan_reports_invalid_targets() -> None:
+    package = PluginPackage(
+        "p", "1.0.0", (PluginContribution("c", "nowhere", static_descriptor()),)
     )
-    with pytest.raises(PluginDiscoveryError, match="Duplicate contribution"):
-        discovery.discover()
+    discovery = PluginDiscovery(lambda: entries(lambda: package))
+    result = discovery.scan()
+    assert result.failures
 
 
-def test_rejects_invalid_package_factory_and_target_scope() -> None:
-    discovery = PluginDiscovery(
-        lambda: [FakeEntryPoint("value", "pkg:value", package())]
-    )
-    with pytest.raises(PluginDiscoveryError, match="must be callable"):
-        discovery.discover()
+def test_scan_reports_tool_exports_with_wrong_specification() -> None:
+    from langharness_plugin.package import ToolExport
 
-    invalid = PluginPackage(
-        id="invalid",
-        version="1",
-        contributions=(
-            PluginContribution("bad", "invalid", descriptor("bad")),  # type: ignore[arg-type]
-        ),
-    )
-    discovery = PluginDiscovery(
-        lambda: [FakeEntryPoint("invalid", "pkg:plugin", lambda: invalid)]
-    )
-    with pytest.raises(PluginDiscoveryError, match="target"):
-        discovery.discover()
-
-
-def test_discover_returns_packages_when_there_are_no_failures() -> None:
-    discovery = PluginDiscovery(
-        lambda: [FakeEntryPoint("ok", "pkg:plugin", lambda: package())]
-    )
-    assert [item.id for item in discovery.discover()] == ["example.package"]
-
-
-def test_rejects_non_package_factory_and_empty_metadata() -> None:
-    discovery = PluginDiscovery(
-        lambda: [FakeEntryPoint("bad", "pkg:plugin", lambda: object())]
-    )
-    with pytest.raises(PluginDiscoveryError, match="did not return PluginPackage"):
-        discovery.discover()
-
-    discovery = PluginDiscovery(
-        lambda: [FakeEntryPoint("empty", "pkg:plugin", lambda: PluginPackage("", "1", ()))]
-    )
-    with pytest.raises(PluginDiscoveryError, match="id and version"):
-        discovery.discover()
-
-
-def test_rejects_duplicate_descriptor_name_and_instance_across_packages() -> None:
-    same_name = PluginPackage(
-        "name-two",
-        "1",
-        (PluginContribution("one", "server", descriptor("echo")),),
-    )
-    discovery = PluginDiscovery(
-        lambda: [
-            FakeEntryPoint("one", "pkg:plugin", lambda: package()),
-            FakeEntryPoint("two", "pkg:plugin", lambda: same_name),
-        ]
-    )
-    with pytest.raises(PluginDiscoveryError, match="Duplicate plugin descriptor"):
-        discovery.discover()
-
-    shared_instance = PluginPackage(
-        "instance-two",
-        "1",
+    package = PluginPackage(
+        "p", "1.0.0",
         (
             PluginContribution(
-                "one",
-                "server",
-                descriptor_with_instance("other", "echo"),
+                "c", "server", static_descriptor(),
+                tool_exports=(ToolExport("t", "d", "m", object),),
             ),
         ),
     )
-    discovery = PluginDiscovery(
-        lambda: [
-            FakeEntryPoint("one", "pkg:plugin", lambda: package()),
-            FakeEntryPoint("two", "pkg:plugin", lambda: shared_instance),
-        ]
-    )
-    with pytest.raises(PluginDiscoveryError, match="Duplicate plugin instance"):
-        discovery.discover()
-
-
-def test_rejects_tool_exports_without_target_specification() -> None:
-    invalid = PluginPackage(
-        "tool-exports",
-        "1",
-        (
-            PluginContribution(
-                "bad",
-                "server",
-                descriptor("bad", specification="example.service"),
-                tool_exports=(ToolExport("bad", "Bad", "bad", EchoArgs),),
-            ),
-        ),
-    )
-    discovery = PluginDiscovery(
-        lambda: [FakeEntryPoint("bad", "pkg:plugin", lambda: invalid)]
-    )
-    with pytest.raises(PluginDiscoveryError, match="tool_export.target"):
-        discovery.discover()
-
-
-def test_discovers_builtin_packages_from_runtime_plugin_directories() -> None:
-    packages = builtin_packages()
-    discovery = PluginDiscovery(
-        lambda: [
-            FakeEntryPoint(package.id, f"{package.id}:package", lambda package=package: package)
-            for package in packages
-        ]
-    )
-
+    discovery = PluginDiscovery(lambda: entries(lambda: package))
     result = discovery.scan()
-
-    assert result.failures == ()
-    assert [item.id for item in result.packages] == [
-        "builtin.api",
-        "builtin.cli",
-        "builtin.config",
-        "builtin.core",
-        "builtin.logging",
-    ]
-    modules = {
-        contribution.descriptor.module
-        for package in result.packages
-        for contribution in package.contributions
-    }
-    assert any(module.startswith("langharness_api.plugins.") for module in modules)
-    assert any(module.startswith("langharness_cli.plugins.") for module in modules)
-    assert any(module.startswith("langharness_config.plugins.") for module in modules)
-    assert any(module.startswith("langharness_core.plugins.") for module in modules)
-    assert any(module.startswith("langharness_logging.plugins.") for module in modules)
+    assert result.failures
 
 
-def test_builtin_packages_are_declarative_and_do_not_share_names() -> None:
-    names: set[str] = set()
-    instances: set[str] = set()
-    for package in builtin_packages():
-        assert package.id.startswith("builtin.")
-        for contribution in package.contributions:
-            descriptor = contribution.descriptor
-            assert descriptor.name not in names
-            assert descriptor.instance not in instances
-            names.add(descriptor.name)
-            instances.add(descriptor.instance)
-
-
-def test_dynamic_package_scans_cleanly_alongside_builtin_packages() -> None:
-    packages = builtin_packages() + (core_dynamic_package(),)
-    discovery = PluginDiscovery(
-        lambda: [
-            FakeEntryPoint(package.id, f"{package.id}:package", lambda package=package: package)
-            for package in packages
-        ]
+def test_scan_reports_duplicate_package_ids() -> None:
+    package = PluginPackage(
+        "p", "1.0.0", (PluginContribution("c", "server", static_descriptor()),)
     )
+    discovery = PluginDiscovery(lambda: entries(lambda: package, lambda: package))
+    with pytest.raises(Exception, match="[Dd]uplicate"):
+        discovery.scan()
 
+
+def test_scan_reports_invalid_descriptors_as_failures() -> None:
+    bad = static_descriptor(description="")
+    package = PluginPackage(
+        "p", "1.0.0", (PluginContribution("c", "server", bad),)
+    )
+    discovery = PluginDiscovery(lambda: entries(lambda: package))
     result = discovery.scan()
-
-    assert result.failures == ()
-    assert "dynamic.core" in [item.id for item in result.packages]
+    assert result.packages == ()
+    assert result.failures

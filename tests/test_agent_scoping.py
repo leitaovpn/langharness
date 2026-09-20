@@ -18,6 +18,7 @@ import asyncio
 import json
 from typing import Any
 
+import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
@@ -30,11 +31,15 @@ from langharness_core.contracts import (
 from langharness_core.plugin import (
     agent_directory_descriptor,
     agent_loop_template_descriptor,
+    agent_plugin_descriptor,
     agent_plugin_template_descriptor,
     agent_registry_descriptor,
+    agent_registry_properties,
 )
 from langharness_plugin.plugin_manager import PluginManager
-from langharness_plugin.registry import PluginDescriptor, PluginRegistry
+from langharness_plugin.registry import PluginRegistry
+from langharness_plugin.scope_const import AGENT_SCOPE_ID, SERVER_SCOPE_ID
+from langharness_scope import ScopeId
 
 
 class StaticModel(BaseChatModel):
@@ -59,33 +64,6 @@ class StaticModel(BaseChatModel):
         return self
 
 
-def llm_descriptor(agent_id: str, model: StaticModel) -> PluginDescriptor:
-    return PluginDescriptor(
-        name=f"llm-{agent_id}",
-        version="1.0.0",
-        module="langharness_core.plugins.llm.llm",
-        factory="llm-plugin-factory",
-        instance=f"llm-{agent_id}",
-        specification=SPEC_LLM,
-        properties={"plugin.model.instance": model, "plugin.agent_id": agent_id},
-    )
-
-
-def loop_descriptor(agent_id: str, *, llm_filter: str | None = None) -> PluginDescriptor:
-    properties: dict[str, Any] = {"plugin.agent_id": agent_id}
-    if llm_filter is not None:
-        properties["requires.filters"] = {"_llm_provider": llm_filter}
-    return PluginDescriptor(
-        name=f"loop-{agent_id}",
-        version="1.0.0",
-        module="langharness_core.plugins.loop.agent_loop",
-        factory="agent-loop-factory",
-        instance=f"loop-{agent_id}",
-        specification=SPEC_AGENT_LOOP,
-        properties=properties,
-    )
-
-
 def bound_model_ids(manager: PluginManager) -> set[int]:
     loops = manager.get_services(SPEC_AGENT_LOOP)
     return {id(loop._llm_provider.get_model()) for loop in loops}
@@ -93,27 +71,59 @@ def bound_model_ids(manager: PluginManager) -> set[int]:
 
 def install_llm_bundle(manager: PluginManager, agent_id: str, model: StaticModel) -> None:
     """Install the llm bundle once and instantiate one agent-scoped llm."""
-    descriptor = llm_descriptor(agent_id, model)
-    manager.install_plugin(descriptor)
+    manager.install_descriptor(agent_plugin_descriptor("llm"))
+    add_scoped_llm(manager, agent_id, model)
 
 
-def add_scoped_llm(manager: PluginManager, agent_id: str, model: StaticModel) -> None:
-    manager.instantiate_instance(llm_descriptor(agent_id, model))
+def add_scoped_llm(
+    manager: PluginManager,
+    agent_id: str,
+    model: StaticModel,
+    *,
+    scope_id: ScopeId = AGENT_SCOPE_ID,
+) -> None:
+    manager.create_instance(
+        "llm-plugin-factory",
+        "langharness_core.plugins.llm.llm",
+        scope_id,
+        properties={"plugin.model.instance": model, "plugin.agent_id": agent_id},
+    )
 
 
-def add_scoped_loop(manager: PluginManager, agent_id: str, llm_filter: str | None) -> None:
-    manager.instantiate_instance(loop_descriptor(agent_id, llm_filter=llm_filter))
+def add_scoped_loop(
+    manager: PluginManager,
+    agent_id: str,
+    llm_filter: str | None,
+    *,
+    scope_id: ScopeId = AGENT_SCOPE_ID,
+) -> None:
+    properties: dict[str, Any] = {"plugin.agent_id": agent_id}
+    if llm_filter is not None:
+        properties["requires.filters"] = {"_llm_provider": llm_filter}
+    manager.create_instance(
+        "agent-loop-factory",
+        "langharness_core.plugins.loop.agent_loop",
+        scope_id,
+        properties=properties,
+    )
 
 
 def install_loop_bundle(manager: PluginManager, agent_id: str, llm_filter: str | None) -> None:
-    manager.install_plugin(loop_descriptor(agent_id, llm_filter=llm_filter))
+    manager.install_descriptor(agent_loop_template_descriptor())
+    add_scoped_loop(manager, agent_id, llm_filter)
+
+
+def agent_scope(manager: PluginManager, agent_id: str) -> ScopeId:
+    scope_id = ScopeId(f"agent:{agent_id}")
+    manager.add_scope(scope_id, name=agent_id, parent_id=AGENT_SCOPE_ID)
+    return scope_id
 
 
 def test_instantiate_properties_are_published_on_the_service() -> None:
     manager = PluginManager(PluginRegistry())
     manager.start()
     try:
-        manager.install_plugin(llm_descriptor("ag1", StaticModel()))
+        install_llm_bundle(manager, "ag1", StaticModel())
         properties = manager.service_properties(SPEC_LLM)
         assert [item.get("plugin.agent_id") for item in properties] == ["ag1"]
     finally:
@@ -126,10 +136,14 @@ def test_requires_filters_scope_each_loop_to_its_own_llm() -> None:
     manager = PluginManager(PluginRegistry())
     manager.start()
     try:
-        install_llm_bundle(manager, "ag1", model_a)
-        add_scoped_llm(manager, "ag2", model_b)
-        install_loop_bundle(manager, "ag1", "(plugin.agent_id=ag1)")
-        add_scoped_loop(manager, "ag2", "(plugin.agent_id=ag2)")
+        manager.install_descriptor(agent_plugin_descriptor("llm"))
+        manager.install_descriptor(agent_loop_template_descriptor())
+        # Each agent owns a scope, so the loop's scope chain sees only its
+        # own LLM instance.
+        add_scoped_llm(manager, "ag1", model_a, scope_id=agent_scope(manager, "ag1"))
+        add_scoped_llm(manager, "ag2", model_b, scope_id=agent_scope(manager, "ag2"))
+        add_scoped_loop(manager, "ag1", "(plugin.agent_id=ag1)", scope_id=agent_scope(manager, "ag1"))
+        add_scoped_loop(manager, "ag2", "(plugin.agent_id=ag2)", scope_id=agent_scope(manager, "ag2"))
 
         assert len(manager.get_services(SPEC_AGENT_LOOP)) == 2
         assert bound_model_ids(manager) == {id(model_a), id(model_b)}
@@ -151,17 +165,18 @@ def test_unfiltered_loops_share_one_best_llm() -> None:
         manager.stop()
 
 
-def test_malformed_filter_falls_back_to_unfiltered_binding() -> None:
+def test_malformed_filter_rejects_instance_creation() -> None:
     manager = PluginManager(PluginRegistry())
     manager.start()
     try:
         install_llm_bundle(manager, "ag1", StaticModel())
         add_scoped_llm(manager, "ag2", StaticModel())
-        install_loop_bundle(manager, "ag1", "not a filter")
+        manager.install_descriptor(agent_loop_template_descriptor())
 
-        loops = manager.get_services(SPEC_AGENT_LOOP)
-        assert len(loops) == 1
-        assert loops[0]._llm_provider is not None
+        with pytest.raises(ValueError, match="filter"):
+            add_scoped_loop(manager, "ag1", "not a filter")
+
+        assert manager.get_services(SPEC_AGENT_LOOP) == []
     finally:
         manager.stop()
 
@@ -196,21 +211,29 @@ def test_directory_materializes_isolated_plugin_sets(tmp_path: Any) -> None:
     )
     model_a = StaticModel()
     model_b = StaticModel()
-    registry = PluginRegistry(
-        [
+    manager = PluginManager(PluginRegistry())
+    manager.start()
+    try:
+        for descriptor in [
             agent_plugin_template_descriptor("llm"),
             agent_plugin_template_descriptor("tools"),
             agent_plugin_template_descriptor("name"),
             agent_loop_template_descriptor(),
-            agent_registry_descriptor(str(tmp_path)),
+            agent_registry_descriptor(),
             agent_directory_descriptor(),
-        ]
-    )
-    manager = PluginManager(registry)
-    manager.start()
-    try:
-        for item in registry.list():
-            manager.install_plugin(item)
+        ]:
+            manager.install_descriptor(descriptor)
+        manager.create_instance(
+            "agent-registry-plugin-factory",
+            "langharness_core.plugins.agents.registry",
+            SERVER_SCOPE_ID,
+            properties=agent_registry_properties(str(tmp_path)),
+        )
+        manager.create_instance(
+            "agent-directory-plugin-factory",
+            "langharness_core.plugins.agents.directory",
+            SERVER_SCOPE_ID,
+        )
         directory = manager.get_service(SPEC_AGENT_DIRECTORY)
         assert directory is not None
 

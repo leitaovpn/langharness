@@ -294,7 +294,10 @@ def test_real_cli_dynamic_discover_install_enable_disable_uninstall(
         assert "Plugin result" in install.stdout
         assert "real-echo" in install.stdout
         assert "server" in install.stdout
-        assert any(item.get("name") == "real-echo" for item in runtime_plugins(base_url))
+        assert any(
+        item.get("factory") == "real-echo-factory"
+        for item in runtime_plugins(base_url)
+    )
 
         disable = run_cli(
             tmp_path,
@@ -313,7 +316,10 @@ def test_real_cli_dynamic_discover_install_enable_disable_uninstall(
         )
         assert disable.returncode == 0, disable.stderr
         assert "disabled" in disable.stdout
-        disabled = next(item for item in runtime_plugins(base_url) if item.get("name") == "real-echo")
+        disabled = next(
+        item for item in runtime_plugins(base_url)
+        if item.get("factory") == "real-echo-factory"
+    )
         assert disabled.get("enabled") is False
 
         enable = run_cli(
@@ -333,7 +339,10 @@ def test_real_cli_dynamic_discover_install_enable_disable_uninstall(
         )
         assert enable.returncode == 0, enable.stderr
         assert "enabled" in enable.stdout
-        enabled = next(item for item in runtime_plugins(base_url) if item.get("name") == "real-echo")
+        enabled = next(
+        item for item in runtime_plugins(base_url)
+        if item.get("factory") == "real-echo-factory"
+    )
         assert enabled.get("enabled") is True
 
         uninstall = run_cli(
@@ -353,7 +362,10 @@ def test_real_cli_dynamic_discover_install_enable_disable_uninstall(
         )
         assert uninstall.returncode == 0, uninstall.stderr
         assert "Plugin result" in uninstall.stdout
-        assert all(item.get("name") != "real-echo" for item in runtime_plugins(base_url))
+        assert all(
+        item.get("factory") != "real-echo-factory"
+        for item in runtime_plugins(base_url)
+    )
 
 
 def test_real_cli_llm_tool_call_with_dynamic_echo(tmp_path: Path) -> None:
@@ -369,6 +381,7 @@ def test_real_cli_llm_tool_call_with_dynamic_echo(tmp_path: Path) -> None:
                 json={
                     "package_id": "real.echo",
                     "contribution_id": "echo",
+                    "scope_id": "server",
                 },
                 timeout=10.0,
             )

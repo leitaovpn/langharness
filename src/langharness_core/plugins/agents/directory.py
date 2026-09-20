@@ -25,15 +25,17 @@ from langharness_core.contracts import (
 from langharness_core.plugin import (
     AGENT_PLUGIN_CATALOG,
     DEFAULT_AGENT_PLUGINS,
+    agent_binding_properties,
     agent_filter,
     agent_loop_descriptor,
+    agent_loop_properties,
     agent_plugin_descriptor,
     agent_required_modules,
     agent_scoped_specifications,
-    default_llm_descriptor,
+    default_llm_properties,
 )
 from langharness_plugin.contracts import ScopedPluginRegistrar
-from langharness_plugin.registry import PluginDescriptor
+from langharness_plugin.registry import PluginInstanceSnapshot
 from langharness_plugin.scope_const import AGENT_SCOPE_ID, agent_instance_scope_id
 from langharness_plugin.validation import ContractGuard
 
@@ -61,11 +63,11 @@ class AgentDirectoryPlugin:
             "_scope": ContractGuard(self, "_scope", ScopedPluginRegistrar),
             "_configs_service": ContractGuard(self, "_configs_service", Configs),
         }
-        self._instances: dict[str, dict[str, PluginDescriptor]] = {}
-        self._loops: dict[str, PluginDescriptor] = {}
+        self._instances: dict[str, dict[str, PluginInstanceSnapshot]] = {}
+        self._loops: dict[str, PluginInstanceSnapshot] = {}
         self._failed: set[str] = set()
         self._configs: dict[str, dict[str, Any]] = {}
-        self._default_llm: PluginDescriptor | None = None
+        self._default_llm: PluginInstanceSnapshot | None = None
         self._llm_default_properties: dict[str, Any] | None = None
 
     @Validate
@@ -183,17 +185,24 @@ class AgentDirectoryPlugin:
                 return
         else:
             merged.update(properties)
-        descriptor = agent_plugin_descriptor(agent["id"], plugin, merged)
-        current = self._instances.get(agent["id"], {}).get(plugin)
-        if current == descriptor:
-            return
-        if current is not None:
-            self._safe_kill(current.instance)
+        descriptor = agent_plugin_descriptor(plugin)
         scope_id = agent_instance_scope_id(agent["id"])
-        self._scope.instantiate_instance(
-            descriptor, scope_id=scope_id, plugin_key=plugin
+        wanted = agent_binding_properties(agent["id"], plugin, merged)
+        current = self._instances.get(agent["id"], {}).get(plugin)
+        if current is not None:
+            unchanged = current.scope_id == scope_id and all(
+                dict(current.properties).get(key) == value
+                for key, value in wanted.items()
+            )
+            if unchanged:
+                return
+            # Replace semantics: agent instances are derived state, so the
+            # old component is torn down and a fresh UUID is created.
+            self._scope.delete_instance(current.instance)
+        snapshot = self._scope.create_instance(
+            descriptor.factory, descriptor.module, scope_id, properties=wanted
         )
-        self._instances.setdefault(agent["id"], {})[plugin] = descriptor
+        self._instances.setdefault(agent["id"], {})[plugin] = snapshot
 
     def reload(self, agent_id: str | None = None) -> None:
         targets = [agent_id] if agent_id is not None else list(self._instances)
@@ -253,15 +262,18 @@ class AgentDirectoryPlugin:
         properties = self._llm_defaults()
         if not properties:
             return
-        descriptor = default_llm_descriptor(properties)
+        descriptor = agent_plugin_descriptor("llm")
         try:
-            self._scope.instantiate_instance(
-                descriptor, scope_id=AGENT_SCOPE_ID, plugin_key="llm"
+            snapshot = self._scope.create_instance(
+                descriptor.factory,
+                descriptor.module,
+                AGENT_SCOPE_ID,
+                properties=default_llm_properties(properties),
             )
         except Exception as exc:
             LOGGER.warning("Could not create the default LLM: %s", exc)
             return
-        self._default_llm = descriptor
+        self._default_llm = snapshot
 
     def _bindings(self, agent_id: str) -> dict[str, dict[str, Any]]:
         stored = self._configs.get(agent_id)
@@ -290,10 +302,10 @@ class AgentDirectoryPlugin:
         if missing:
             LOGGER.debug("Agent %s waits for bundles: %s", agent_id, missing)
             return
-        created: dict[str, PluginDescriptor] = {}
+        created: dict[str, PluginInstanceSnapshot] = {}
         try:
             scope_id = agent_instance_scope_id(agent_id)
-            self._scope.ensure_scope(
+            self._scope.add_scope(
                 scope_id,
                 name=agent.get("name") or agent_id,
                 parent_id=AGENT_SCOPE_ID,
@@ -304,25 +316,30 @@ class AgentDirectoryPlugin:
                         "Ignoring unknown agent plugin %s for %s", plugin, agent_id
                     )
                     continue
-                descriptor = self._binding_descriptor(agent, plugin)
-                if descriptor is None:
+                properties = self._binding_properties(agent, plugin)
+                if properties is None:
                     continue
-                self._scope.instantiate_instance(
-                    descriptor, scope_id=scope_id, plugin_key=plugin
+                descriptor = agent_plugin_descriptor(plugin)
+                snapshot = self._scope.create_instance(
+                    descriptor.factory, descriptor.module, scope_id,
+                    properties=properties,
                 )
-                created[plugin] = descriptor
-            loop = agent_loop_descriptor(
-                agent_id,
-                agent_scoped_specifications(),
-                visibility_filter=self._scope.scope_filter(scope_id),
-            )
-            self._scope.instantiate_instance(
-                loop, scope_id=scope_id, plugin_key="agent-loop"
+                created[plugin] = snapshot
+            loop_descriptor = agent_loop_descriptor()
+            loop = self._scope.create_instance(
+                loop_descriptor.factory,
+                loop_descriptor.module,
+                scope_id,
+                properties=agent_loop_properties(
+                    agent_id,
+                    agent_scoped_specifications(),
+                    visibility_filter=self._scope.scope_filter(scope_id),
+                ),
             )
         except Exception as exc:
             LOGGER.warning("Could not materialize agent %s: %s", agent_id, exc)
-            for descriptor in created.values():
-                self._safe_kill(descriptor.instance)
+            for snapshot in created.values():
+                self._safe_kill(snapshot.instance)
             try:
                 self._scope.remove_scope(agent_instance_scope_id(agent_id))
             except (KeyError, ValueError):
@@ -333,9 +350,9 @@ class AgentDirectoryPlugin:
         self._loops[agent_id] = loop
         self._instances[agent_id] = created
 
-    def _binding_descriptor(
+    def _binding_properties(
         self, agent: dict[str, Any], plugin: str
-    ) -> PluginDescriptor | None:
+    ) -> dict[str, Any] | None:
         properties = dict(self.binding_properties(agent["id"], plugin))
         if plugin == "llm":
             properties = {**self._llm_defaults(), **properties}
@@ -350,21 +367,21 @@ class AgentDirectoryPlugin:
                 return None
         if plugin == "name":
             properties.setdefault("plugin.agent_name", agent.get("name") or agent["id"])
-        return agent_plugin_descriptor(agent["id"], plugin, properties)
+        return agent_binding_properties(agent["id"], plugin, properties)
 
     def _teardown(self, agent_id: str) -> None:
         loop = self._loops.pop(agent_id, None)
         if loop is not None:
             self._safe_kill(loop.instance)
-        for descriptor in self._instances.pop(agent_id, {}).values():
-            self._safe_kill(descriptor.instance)
+        for snapshot in self._instances.pop(agent_id, {}).values():
+            self._safe_kill(snapshot.instance)
 
     def _safe_kill(self, instance: str) -> None:
         if self._scope is None:
             return
         try:
-            self._scope.kill_instance(instance)
-        except KeyError:
+            self._scope.delete_instance(instance)
+        except Exception:
             LOGGER.debug("Scoped instance %s was already gone", instance)
 
     def _require_agent(self, agent_id: str) -> dict[str, Any]:

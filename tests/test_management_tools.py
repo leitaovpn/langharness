@@ -19,14 +19,12 @@ def _registration(name: str = "demo-plugin", scope_id: str = "agent") -> Any:
         package_id="dynamic.core",
         contribution_id="demo-template",
         package_version="1.0.0",
+        instance=f"uuid-{name}",
+        factory=f"{name}-factory",
+        module="langharness_core.plugins.tools.demo",
         scope_id=ScopeId(scope_id),
         enabled=True,
         status="installed",
-        descriptor=SimpleNamespace(
-            name=name,
-            module="langharness_core.plugins.tools.demo",
-            specification="agent.plugin.tools",
-        ),
     )
 
 
@@ -102,16 +100,18 @@ def test_list_scope_tree_renders_tree() -> None:
 def test_list_runtime_plugins_aggregates_all_scopes() -> None:
     tool = _tools(_plugin(FakeManager()))["list_runtime_plugins"]
     result = tool.invoke({})
-    assert [item["name"] for item in result["plugins"]] == [
-        "demo-plugin",
-        "other-plugin",
+    assert [item["factory"] for item in result["plugins"]] == [
+        "demo-plugin-factory",
+        "other-plugin-factory",
     ]
 
 
 def test_list_runtime_plugins_filters_by_scope() -> None:
     tool = _tools(_plugin(FakeManager()))["list_runtime_plugins"]
     result = tool.invoke({"scope": "server"})
-    assert [item["name"] for item in result["plugins"]] == ["other-plugin"]
+    assert [item["factory"] for item in result["plugins"]] == [
+        "other-plugin-factory"
+    ]
     assert result["plugins"][0]["scope_id"] == "server"
 
 
@@ -199,7 +199,8 @@ def test_install_delegates_and_summarizes() -> None:
         }
     )
     assert manager.installed == [("dynamic.core", "demo-template", "agent:a")]
-    assert result["name"] == "demo-plugin"
+    assert result["factory"] == "demo-plugin-factory"
+    assert result["instance"]
     assert result["scope_id"] == "agent"
 
 
@@ -277,7 +278,7 @@ def test_update_properties_delegates_and_requires_nonempty() -> None:
     assert manager.properties_calls == [
         ("demo-plugin", {"plugin.timeout": 5}, "agent")
     ]
-    assert result["name"] == "demo-plugin"
+    assert result["factory"] == "demo-plugin-factory"
 
 
 def test_coordinator_errors_map_to_error_dicts() -> None:

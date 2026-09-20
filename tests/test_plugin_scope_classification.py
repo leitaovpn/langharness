@@ -1,87 +1,87 @@
-"""Every built-in plugin belongs to the canonical runtime scope tree."""
+"""Every built-in contribution maps into the canonical runtime scope tree."""
+# mypy: ignore-errors
+# pyright: reportAttributeAccessIssue=false, reportOptionalMemberAccess=false
 
-from langharness_api.plugin import (
-    api_agents_descriptor,
-    api_auth_descriptor,
-    api_db_descriptor,
-    api_health_descriptor,
-    api_plugins_descriptor,
-    api_rate_limit_descriptor,
-    api_scopes_descriptor,
-    api_server_descriptor,
-    api_sessions_descriptor,
-    api_stream_descriptor,
-)
-from langharness_cli.plugin import cli_descriptors
-from langharness_config.plugin import config_descriptors
-from langharness_core.plugin import (
-    agent_directory_descriptor,
-    agent_loop_descriptor,
-    agent_loop_template_descriptor,
-    agent_plugin_descriptor,
-    agent_plugin_template_descriptor,
-    agent_registry_descriptor,
-    session_index_descriptor,
-    sqlite_checkpointer_descriptor,
-    tool_export_adapter_template_descriptor,
-)
-from langharness_logging.plugin import log_descriptor
+from langharness.bootstrap import TARGET_SCOPES
+from langharness_api.plugin import builtin_package as api_package
+from langharness_cli.plugin import builtin_package as cli_package
+from langharness_config.plugin import builtin_package as config_package
+from langharness_core.plugin import builtin_package as core_package
+from langharness_logging.plugin import builtin_package as log_package
+from langharness_scope import ROOT_SCOPE_ID, ScopeId
+
+
+def contributions(package):
+    return {item.id: item for item in package.contributions}
+
+
+def targets(package, ids):
+    return {item.target for item in package.contributions if item.id in ids}
 
 
 def test_common_plugins_are_in_root_scope() -> None:
-    descriptors = [
-        *config_descriptors("/tmp/config"),
-        log_descriptor("server", "/tmp/log"),
-        log_descriptor("cli", "/tmp/log"),
-        api_db_descriptor(),
-    ]
-    assert {(item.scope, item.scope_parent) for item in descriptors} == {
-        ("root", None)
-    }
+    assert targets(config_package(), {"config-toml", "configs"}) == {"root"}
+    assert targets(log_package(), {"server-log", "cli-log"}) == {"root"}
+    assert targets(api_package(), {"api-db"}) == {"root"}
+    assert TARGET_SCOPES["root"] == ROOT_SCOPE_ID
 
 
 def test_cli_plugins_are_in_ui_scope() -> None:
-    assert {(item.scope, item.scope_parent) for item in cli_descriptors("en")} == {
-        ("ui", "root")
-    }
+    assert targets(
+        cli_package(),
+        {
+            "ui-server",
+            "cli-health",
+            "cli-model",
+            "cli-rich-renderer",
+            "cli-session",
+            "cli-plugins",
+            "cli-scope",
+            "cli-shell",
+        },
+    ) == {"ui"}
+    assert TARGET_SCOPES["ui"] == ScopeId("ui")
 
 
 def test_server_plugins_and_checkpointer_are_in_server_scope() -> None:
-    descriptors = [
-        api_auth_descriptor(),
-        api_rate_limit_descriptor(),
-        api_health_descriptor(),
-        api_stream_descriptor(),
-        api_plugins_descriptor("/tmp/config"),
-        api_scopes_descriptor(),
-        api_sessions_descriptor(),
-        api_agents_descriptor(),
-        api_server_descriptor(),
-        sqlite_checkpointer_descriptor("/tmp/data"),
-        session_index_descriptor("/tmp/data"),
-        agent_registry_descriptor("/tmp/data"),
-        agent_directory_descriptor(),
-    ]
-    assert {(item.scope, item.scope_parent) for item in descriptors} == {
-        ("server", "root")
+    server_ids = {
+        "api-auth",
+        "api-rate-limit",
+        "api-health",
+        "api-stream",
+        "api-resume",
+        "api-plugins",
+        "api-scopes",
+        "api-sessions",
+        "api-agents",
+        "api-server",
+        "server-server",
+        "sqlite-checkpointer",
+        "session-index",
+        "agent-registry",
+        "agent-directory",
+        "agent-server",
     }
+    assert targets(api_package(), server_ids) == {"server"}
+    assert targets(core_package(), server_ids) == {"server"}
+    assert TARGET_SCOPES["server"] == ScopeId("server")
 
 
-def test_agent_templates_and_instances_form_two_levels() -> None:
-    templates = [
-        agent_plugin_template_descriptor("llm"),
-        agent_plugin_template_descriptor("tools"),
-        agent_loop_template_descriptor(),
-        tool_export_adapter_template_descriptor(),
-    ]
-    assert {(item.scope, item.scope_parent) for item in templates} == {
-        ("agent", "root")
+def test_agent_templates_live_in_agent_scope_and_instances_are_created_per_agent() -> None:
+    template_ids = {
+        "llm-template",
+        "tools-template",
+        "name-template",
+        "agent-loop-template",
+        "tool-export-adapter-template",
     }
+    assert targets(core_package(), template_ids) == {"agent"}
+    assert TARGET_SCOPES["agent"] == ScopeId("agent")
 
-    instances = [
-        agent_plugin_descriptor("alpha", "llm"),
-        agent_loop_descriptor("alpha", []),
-    ]
-    assert {(item.scope, item.scope_parent) for item in instances} == {
-        ("agent:alpha", "agent")
-    }
+    # Per-agent materialization no longer bakes scope into descriptors:
+    # the directory creates instances at agent:<id> scopes at runtime.
+    from langharness_core.plugin import agent_plugin_descriptor
+
+    descriptor = agent_plugin_descriptor("llm")
+    assert not hasattr(descriptor, "scope")
+    assert not hasattr(descriptor, "scope_parent")

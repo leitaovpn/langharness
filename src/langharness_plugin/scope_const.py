@@ -11,6 +11,7 @@ AGENT_SCOPE_ID = ScopeId("agent")
 PLUGIN_SCOPE_ID = "plugin.scope_id"
 PLUGIN_SCOPE_CHAIN = "plugin.scope_chain"
 PLUGIN_KEY = "plugin.key"
+PLUGIN_INSTANCE_ID = "plugin.instance_id"
 
 # The fixed runtime topology: every process seeds these on PluginManager start.
 BUILTIN_SCOPES: tuple[tuple[ScopeId, str, ScopeId], ...] = (
@@ -27,6 +28,7 @@ def agent_instance_scope_id(agent_id: str) -> ScopeId:
 __all__ = [
     "AGENT_SCOPE_ID",
     "BUILTIN_SCOPES",
+    "PLUGIN_INSTANCE_ID",
     "PLUGIN_KEY",
     "PLUGIN_SCOPE_CHAIN",
     "PLUGIN_SCOPE_ID",

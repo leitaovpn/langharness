@@ -73,8 +73,7 @@ class FakeContribution:
                 "module": f"dynamic_plugins.{id}",
                 "factory": f"fake-{id}-factory",
                 "specification": "plugin.tool_export.target",
-                "enabled": True,
-                "scope": "server",
+                "description": "Fake contribution for route tests.",
             },
         )()
 
@@ -88,16 +87,9 @@ class FakePackage:
 
 class FakeRegistration:
     def __init__(self, name: str) -> None:
-        self.descriptor = type(
-            "Descriptor",
-            (),
-            {
-                "name": name,
-                "module": "dynamic_plugins.echo",
-                "specification": "plugin.tool_export.target",
-                "scope": "server",
-            },
-        )()
+        self.instance = f"uuid-{name}"
+        self.factory = f"{name}-factory"
+        self.module = "dynamic_plugins.echo"
         self.package_id = "example.package"
         self.contribution_id = "echo"
         self.package_version = "1"
@@ -418,8 +410,7 @@ def test_dynamic_discovered_and_rescan(tmp_path: Path) -> None:
                     "module": "dynamic_plugins.echo",
                     "factory": "fake-echo-factory",
                     "specification": "plugin.tool_export.target",
-                    "enabled": True,
-                    "scope": "server",
+                    "description": "Fake contribution for route tests.",
                 }
             ],
         }
@@ -436,7 +427,7 @@ def test_dynamic_runtime_install_enable_upgrade_uninstall(tmp_path: Path) -> Non
 
     runtime = client.get("/plugins/runtime")
     assert runtime.status_code == 200
-    assert runtime.json()["plugins"][0]["name"] == "echo"
+    assert runtime.json()["plugins"][0]["factory"] == "echo-factory"
 
     install = client.post(
         "/plugins/install",
@@ -447,7 +438,8 @@ def test_dynamic_runtime_install_enable_upgrade_uninstall(tmp_path: Path) -> Non
         },
     )
     assert install.status_code == 200
-    assert install.json()["name"] == "echo@server"
+    assert install.json()["factory"] == "echo@server-factory"
+    assert install.json()["instance"] == "uuid-echo@server"
     assert plugin._dynamic.installs == [("example.package", "echo", "server")]
 
     enable = client.put(
@@ -488,7 +480,9 @@ def test_runtime_plugins_filters_by_scope(tmp_path: Path) -> None:
     response = make_client(plugin).get("/plugins/runtime", params={"scope": "server"})
 
     assert response.status_code == 200
-    assert [item["name"] for item in response.json()["plugins"]] == ["server-echo"]
+    assert [item["factory"] for item in response.json()["plugins"]] == [
+        "server-echo-factory"
+    ]
 
 
 def test_dynamic_endpoints_require_dynamic_manager(tmp_path: Path) -> None:
@@ -500,7 +494,7 @@ def test_dynamic_endpoints_require_dynamic_manager(tmp_path: Path) -> None:
         ("get", "/plugins/discovered", {}),
         ("post", "/plugins/rescan", {}),
         ("get", "/plugins/runtime", {}),
-        ("post", "/plugins/install", {"json": {"package_id": "p", "contribution_id": "c"}}),
+        ("post", "/plugins/install", {"json": {"package_id": "p", "contribution_id": "c", "scope_id": "server"}}),
         ("put", "/plugins/runtime/x/enabled", {"json": {"enabled": True}, "params": {"scope": "server"}}),
         ("delete", "/plugins/runtime/x", {"params": {"scope": "server"}}),
         ("post", "/plugins/runtime/x/upgrade", {"params": {"scope": "server"}}),
@@ -523,7 +517,7 @@ def test_dynamic_endpoints_report_errors(tmp_path: Path) -> None:
 
     install_response = client.post(
         "/plugins/install",
-        json={"package_id": "p", "contribution_id": "c"},
+        json={"package_id": "p", "contribution_id": "c", "scope_id": "server"},
     )
     assert install_response.status_code == 400
     assert install_response.json()["detail"] == "'missing'"

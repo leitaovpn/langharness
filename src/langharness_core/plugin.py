@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +32,6 @@ from langharness_core.plugins.agents.export import AGENT_TOOL_EXPORTS
 from langharness_plugin.contracts import SPEC_TOOL_EXPORT_TARGET
 from langharness_plugin.package import PluginContribution, PluginPackage
 from langharness_plugin.registry import PluginDescriptor
-from langharness_plugin.scope_const import AGENT_SCOPE_ID, agent_instance_scope_id
 
 AGENT_PLUGIN_CATALOG: dict[str, tuple[str, str, str]] = {
     "llm": (
@@ -153,6 +151,79 @@ AGENT_LOOP_FIELDS: dict[str, str] = {
     SPEC_INTERRUPT_AFTER: "_interrupt_after_providers",
 }
 
+AGENT_PLUGIN_DESCRIPTIONS: dict[str, str] = {
+    "llm": (
+        "Provides the LLM service consumed by an agent loop. Implements "
+        "agent.plugin.llm. Use it whenever an agent must call a model; skip it "
+        "when the agent should inherit the scope default. Properties: "
+        "plugin.model.name, plugin.model.instance, plugin.model.api_key, "
+        "plugin.model.base_url, plugin.model.protocol, plugin.agent_id. "
+        "Requires a restart for property changes. Uninstall when the agent "
+        "is removed."
+    ),
+    "tools": (
+        "Provides tool services for one agent scope. Implements agent.plugin.tools. "
+        "Properties: plugin.tools.root_dir, plugin.agent_id. Requires a restart "
+        "for property changes. Uninstall when the agent is removed."
+    ),
+    "name": (
+        "Names the agent in UI and prompts. Implements agent.plugin.name. "
+        "Properties: plugin.agent_name, plugin.agent_id. Requires a restart "
+        "for property changes. Uninstall when the agent is removed."
+    ),
+    "agent-loop": (
+        "Runs the agent loop for one agent scope. Implements "
+        "agent.plugin.agent_loop. Properties: plugin.agent_id and "
+        "requires.filters for scoped dependency fields. Requires a restart "
+        "for property changes. Uninstall when the agent is removed."
+    ),
+    "tool-export-adapter": (
+        "Adapts a tool export target into scoped tool services. Implements "
+        "agent.plugin.tools. Properties: plugin.tool_export.target and "
+        "plugin.tool_export.exports. Managed by the dynamic plugin coordinator."
+    ),
+    "agent-directory": (
+        "Materializes agent plugin sets from stored agent configurations. "
+        "Implements agent.plugin.agent_directory. No properties. Do not "
+        "uninstall while the server manages agents."
+    ),
+    "agent-server": (
+        "Serves the agent management API for the server process. Implements "
+        "agent.plugin.agent_server. No properties. Uninstall to disable "
+        "agent management endpoints."
+    ),
+    "agent-registry": (
+        "Persists agent configurations. Implements agent.registry. "
+        "Properties: plugin.agents.path. Requires a restart for property "
+        "changes. Uninstall when agent management is disabled."
+    ),
+    "session-index": (
+        "Indexes sessions in a local SQLite database. Implements session.index. "
+        "Properties: plugin.sessions.path. Requires a restart for property "
+        "changes. Uninstall when session indexing is disabled."
+    ),
+    "sqlite-checkpointer": (
+        "Persists agent checkpoints in a local SQLite database. Implements "
+        "agent.plugin.checkpointer. Properties: plugin.checkpoint.path. "
+        "Requires a restart for property changes. Uninstall when checkpointing "
+        "is disabled."
+    ),
+    "agent-operations-export": (
+        "Exports agent management operations as agent tools. Implements "
+        "plugin.tool_export.target. No properties. Uninstall to remove the "
+        "agent operations tools."
+    ),
+}
+
+
+def _dynamic_description(plugin: str, specification: str) -> str:
+    return (
+        f"Agent plugin capability: {plugin}. Implements {specification}. "
+        "Install it to make this capability available to agent scopes; "
+        "materialize it per agent with an agent_instance install. Requires "
+        "a restart for property changes. Uninstall when no agent uses it."
+    )
+
 
 def agent_scoped_specifications() -> list[str]:
     """Every specification the directory may materialize per agent."""
@@ -171,72 +242,71 @@ def agent_filter(agent_id: str) -> str:
     return f"(plugin.agent_id={agent_id})"
 
 
-def agent_plugin_descriptor(
-    agent_id: str, plugin: str, properties: dict[str, Any] | None = None
-) -> PluginDescriptor:
-    """Describe one agent-scoped plugin instance from the catalog."""
+def agent_plugin_descriptor(plugin: str) -> PluginDescriptor:
+    """Static definition of one agent plugin from the catalog."""
     module, factory, specification = AGENT_PLUGIN_CATALOG[plugin]
+    return PluginDescriptor(
+        name=plugin,
+        version="1.0.0",
+        module=module,
+        factory=factory,
+        specification=specification,
+        description=AGENT_PLUGIN_DESCRIPTIONS[plugin],
+    )
+
+
+def agent_binding_properties(
+    agent_id: str, plugin: str, properties: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Effective user properties for one agent plugin instance."""
     merged = dict(AGENT_PLUGIN_SETTINGS.get(plugin, {}))
     merged.update(properties or {})
     merged["plugin.agent_id"] = agent_id
-    return PluginDescriptor(
-        name=f"{plugin}@{agent_id}",
-        version="1.0.0",
-        module=module,
-        factory=factory,
-        instance=f"{plugin}@{agent_id}",
-        specification=specification,
-        properties=merged,
-        scope=str(agent_instance_scope_id(agent_id)),
-        scope_parent="agent",
-    )
+    return merged
 
 
 def agent_plugin_template_descriptor(plugin: str) -> PluginDescriptor:
-    """Install a catalog bundle without instantiating it."""
-    module, factory, specification = AGENT_PLUGIN_CATALOG[plugin]
+    """Static definition used to pre-install a catalog bundle."""
+    descriptor = agent_plugin_descriptor(plugin)
     return PluginDescriptor(
         name=f"{plugin}-template",
-        version="1.0.0",
-        module=module,
-        factory=factory,
-        instance=f"{plugin}-template",
-        specification=specification,
-        enabled=False,
-        scope="agent",
-        scope_parent="root",
+        version=descriptor.version,
+        module=descriptor.module,
+        factory=descriptor.factory,
+        specification=descriptor.specification,
+        description=descriptor.description,
+        swap_policy=descriptor.swap_policy,
     )
 
 
-def default_llm_descriptor(properties: dict[str, Any]) -> PluginDescriptor:
-    """Describe the agent-scope fallback LLM seeded from providers.default.
+def default_llm_properties(properties: dict[str, Any]) -> dict[str, Any]:
+    """User properties for the agent-scope fallback LLM instance."""
+    return dict(properties)
 
-    The instance carries no ``plugin.agent_id``, so it never matches an agent
-    loop's ``_llm_provider`` filter; loops pick it up through the scoped
-    ``_scoped_llm_providers`` visibility filter and an agent-specific LLM
-    shadows it by nearest-scope selection.
-    """
-    module, factory, specification = AGENT_PLUGIN_CATALOG["llm"]
+
+def agent_loop_descriptor() -> PluginDescriptor:
+    """Static definition of the agent loop component."""
     return PluginDescriptor(
-        name="llm@default",
+        name="agent-loop",
         version="1.0.0",
-        module=module,
-        factory=factory,
-        instance="llm@default",
-        specification=specification,
-        properties=properties,
-        scope=str(AGENT_SCOPE_ID),
-        scope_parent="root",
+        module=AGENT_LOOP_MODULE,
+        factory="agent-loop-factory",
+        specification=SPEC_AGENT_LOOP,
+        description=AGENT_PLUGIN_DESCRIPTIONS["agent-loop"],
     )
 
 
-def agent_loop_descriptor(
+def agent_loop_properties(
     agent_id: str,
     scoped_specifications: Iterable[str],
     *,
     visibility_filter: str | None = None,
-) -> PluginDescriptor:
-    """Describe the loop instance scoped to one agent's plugin set."""
+) -> dict[str, Any]:
+    """User properties for one agent's loop instance.
+
+    The manager AND-merges its scope filter over the fields the loop class
+    declares via ``@ScopedDependencies``.
+    """
     scoped_specifications = tuple(scoped_specifications)
     filters = {
         AGENT_LOOP_FIELDS[specification]: visibility_filter or agent_filter(agent_id)
@@ -245,92 +315,82 @@ def agent_loop_descriptor(
     }
     if SPEC_LLM in scoped_specifications:
         filters["_scoped_llm_providers"] = visibility_filter or agent_filter(agent_id)
-    return PluginDescriptor(
-        name=f"agent-loop@{agent_id}",
-        version="1.0.0",
-        module=AGENT_LOOP_MODULE,
-        factory="agent-loop-factory",
-        instance=f"agent-loop@{agent_id}",
-        specification=SPEC_AGENT_LOOP,
-        properties={"plugin.agent_id": agent_id, "requires.filters": filters},
-        scope=str(agent_instance_scope_id(agent_id)),
-        scope_parent="agent",
-    )
+    return {"plugin.agent_id": agent_id, "requires.filters": filters}
 
 
 def agent_loop_template_descriptor() -> PluginDescriptor:
-    """Install the loop bundle without instantiating it."""
+    """Static definition used to pre-install the loop bundle."""
+    descriptor = agent_loop_descriptor()
     return PluginDescriptor(
         name="agent-loop-template",
-        version="1.0.0",
-        module=AGENT_LOOP_MODULE,
-        factory="agent-loop-factory",
-        instance="agent-loop-template",
-        specification=SPEC_AGENT_LOOP,
-        enabled=False,
-        scope="agent",
-        scope_parent="root",
+        version=descriptor.version,
+        module=descriptor.module,
+        factory=descriptor.factory,
+        specification=descriptor.specification,
+        description=descriptor.description,
+        swap_policy=descriptor.swap_policy,
     )
 
 
 def tool_export_adapter_template_descriptor() -> PluginDescriptor:
+    """Static definition used to pre-install the tool export adapter bundle."""
     return PluginDescriptor(
         name="tool-export-adapter-template",
         version="1.0.0",
         module=TOOL_EXPORT_ADAPTER_MODULE,
         factory="tool-export-adapter-factory",
-        instance="tool-export-adapter-template",
         specification=SPEC_TOOL,
-        enabled=False,
-        scope="agent",
-        scope_parent="root",
+        description=AGENT_PLUGIN_DESCRIPTIONS["tool-export-adapter"],
     )
 
 
-def sqlite_checkpointer_descriptor(directory: str) -> PluginDescriptor:
+def sqlite_checkpointer_descriptor() -> PluginDescriptor:
     return PluginDescriptor(
         name="sqlite-checkpointer",
         version="1.0.0",
         module="langharness_core.plugins.checkpointer.sqlite",
         factory="sqlite-checkpointer-plugin-factory",
-        instance="sqlite-checkpointer",
         specification=SPEC_CHECKPOINTER,
-        properties={
-            "plugin.checkpoint.path": str(
-                Path(directory) / "langharness_checkpoints.sqlite3"
-            )
-        },
-        scope="server",
-        scope_parent="root",
+        description=AGENT_PLUGIN_DESCRIPTIONS["sqlite-checkpointer"],
     )
 
 
-def session_index_descriptor(directory: str) -> PluginDescriptor:
+def sqlite_checkpointer_properties(directory: str) -> dict[str, Any]:
+    return {
+        "plugin.checkpoint.path": str(
+            Path(directory) / "langharness_checkpoints.sqlite3"
+        )
+    }
+
+
+def session_index_descriptor() -> PluginDescriptor:
     return PluginDescriptor(
         name="session-index",
         version="1.0.0",
         module="langharness_core.plugins.sessions.sqlite",
         factory="session-index-plugin-factory",
-        instance="session-index",
         specification=SPEC_SESSION_INDEX,
-        properties={"plugin.sessions.path": str(Path(directory) / "sessions.sqlite3")},
-        scope="server",
-        scope_parent="root",
+        description=AGENT_PLUGIN_DESCRIPTIONS["session-index"],
     )
 
 
-def agent_registry_descriptor(directory: str) -> PluginDescriptor:
+def session_index_properties(directory: str) -> dict[str, Any]:
+    return {"plugin.sessions.path": str(Path(directory) / "sessions.sqlite3")}
+
+
+def agent_registry_descriptor() -> PluginDescriptor:
     return PluginDescriptor(
         name="agent-registry",
         version="1.0.0",
         module="langharness_core.plugins.agents.registry",
         factory="agent-registry-plugin-factory",
-        instance="agent-registry",
         specification=SPEC_AGENT_REGISTRY,
-        properties={"plugin.agents.path": str(Path(directory) / "agents.json")},
-        scope="server",
-        scope_parent="root",
+        description=AGENT_PLUGIN_DESCRIPTIONS["agent-registry"],
     )
+
+
+def agent_registry_properties(directory: str) -> dict[str, Any]:
+    return {"plugin.agents.path": str(Path(directory) / "agents.json")}
 
 
 def agent_directory_descriptor() -> PluginDescriptor:
@@ -339,10 +399,8 @@ def agent_directory_descriptor() -> PluginDescriptor:
         version="1.0.0",
         module="langharness_core.plugins.agents.directory",
         factory="agent-directory-plugin-factory",
-        instance="agent-directory",
         specification=SPEC_AGENT_DIRECTORY,
-        scope="server",
-        scope_parent="root",
+        description=AGENT_PLUGIN_DESCRIPTIONS["agent-directory"],
     )
 
 
@@ -352,30 +410,25 @@ def agent_server_descriptor() -> PluginDescriptor:
         version="1.0.0",
         module="langharness_core.plugins.agents.server",
         factory="agent-server-factory",
-        instance="agent-server",
         specification=SPEC_AGENT_SERVER,
-        scope="server",
-        scope_parent="root",
+        description=AGENT_PLUGIN_DESCRIPTIONS["agent-server"],
     )
 
 
 def builtin_package() -> PluginPackage:
     """Describe server-scoped core plugins and agent plugin templates."""
-    directory = str(Path.home() / ".langharness")
     return PluginPackage(
         id="builtin.core",
         version="1.0.0",
         contributions=(
             PluginContribution(
-                "sqlite-checkpointer",
-                "server",
-                sqlite_checkpointer_descriptor(directory),
+                "sqlite-checkpointer", "server", sqlite_checkpointer_descriptor()
             ),
             PluginContribution(
-                "session-index", "server", session_index_descriptor(directory)
+                "session-index", "server", session_index_descriptor()
             ),
             PluginContribution(
-                "agent-registry", "server", agent_registry_descriptor(directory)
+                "agent-registry", "server", agent_registry_descriptor()
             ),
             PluginContribution(
                 "agent-directory", "server", agent_directory_descriptor()
@@ -403,18 +456,15 @@ def builtin_package() -> PluginPackage:
 
 
 def dynamic_template_descriptor(plugin: str) -> PluginDescriptor:
-    """Install a dynamic bundle without instantiating it."""
+    """Static definition of a dynamically installable core plugin."""
     module, factory, specification = DYNAMIC_PLUGIN_CATALOG[plugin]
     return PluginDescriptor(
         name=f"{plugin}-template",
         version="1.0.0",
         module=module,
         factory=factory,
-        instance=f"{plugin}-template",
         specification=specification,
-        enabled=False,
-        scope="agent",
-        scope_parent="root",
+        description=_dynamic_description(plugin, specification),
     )
 
 
@@ -438,14 +488,26 @@ def dynamic_package() -> PluginPackage:
         "agent_instance",
         contributions[human_index].descriptor,
     )
+    # Management tools are likewise installed per agent; the contribution
+    # shares the template's definition and is installed at agent:<id> scopes.
+    management_index = next(
+        index
+        for index, contribution in enumerate(contributions)
+        if contribution.id == "management-tools-plugin-template"
+    )
+    template = contributions[management_index].descriptor
     contributions.append(
         PluginContribution(
             "management-tools-plugin-instance",
             "agent_instance",
-            replace(
-                dynamic_template_descriptor("management-tools-plugin"),
+            PluginDescriptor(
                 name="management-tools-plugin-agent",
-                instance="management-tools-plugin-agent",
+                version=template.version,
+                module=template.module,
+                factory=template.factory,
+                specification=template.specification,
+                description=template.description,
+                swap_policy=template.swap_policy,
             ),
         )
     )
@@ -470,11 +532,8 @@ def agent_tools_package() -> PluginPackage:
                     version="1.0.0",
                     module="langharness_core.plugins.agents.export",
                     factory="agent-operations-export-factory",
-                    instance="agent-operations-export",
                     specification=SPEC_TOOL_EXPORT_TARGET,
-                    scope="agent",
-                    scope_parent="root",
-                    enabled=True,
+                    description=AGENT_PLUGIN_DESCRIPTIONS["agent-operations-export"],
                 ),
                 tool_exports=AGENT_TOOL_EXPORTS,
             ),

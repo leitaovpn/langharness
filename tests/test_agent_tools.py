@@ -173,10 +173,9 @@ def test_agent_tools_package_declares_discoverable_contribution() -> None:
     assert contribution.tool_exports == AGENT_TOOL_EXPORTS
     descriptor = contribution.descriptor
     assert descriptor.name == "agent-operations-export"
-    assert descriptor.instance == "agent-operations-export"
     assert descriptor.module == "langharness_core.plugins.agents.export"
     assert descriptor.factory == "agent-operations-export-factory"
     assert descriptor.specification == SPEC_TOOL_EXPORT_TARGET
-    assert descriptor.enabled is True
-    assert descriptor.scope == "agent"
-    assert descriptor.scope_parent == "root"
+    assert descriptor.description.strip()
+    assert not hasattr(descriptor, "instance")
+    assert not hasattr(descriptor, "scope")

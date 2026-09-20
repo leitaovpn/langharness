@@ -1,169 +1,246 @@
-"""Unit tests for plugin descriptors and registry persistence."""
+"""Tests for the plugin identity model in registry.py."""
 # mypy: ignore-errors
-# pyright: reportOptionalMemberAccess=false
+# pyright: reportArgumentType=false, reportAttributeAccessIssue=false, reportOptionalMemberAccess=false
 
 from __future__ import annotations
 
-from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 
-from langharness_plugin.registry import PluginDescriptor, PluginRegistry
+from langharness_plugin.registry import (
+    PLUGIN_METADATA_ATTR,
+    SWAP_POLICIES,
+    PluginDescriptor,
+    PluginInstanceRecord,
+    PluginMetadata,
+    PluginRegistrationKey,
+    plugin_metadata,
+    validate_descriptor,
+)
+from langharness_scope import ROOT_SCOPE_ID, ScopeId
+
+DESCRIPTION = (
+    "Provides an LLM service for agents. Implements agent.plugin.llm. "
+    "Use it whenever an agent loop needs a model. Properties: plugin.model.name. "
+    "Requires a restart for property changes. Uninstall when no agent needs it."
+)
 
 
-def make_descriptor(name: str = "llm") -> PluginDescriptor:
-    return PluginDescriptor(
-        name=name,
-        version="1.0.0",
-        module=f"langharness_core.plugins.{name}",
-        factory=f"{name}-factory",
-        instance=name,
-        specification=f"agent.plugin.{name}",
-    )
-
-
-def test_descriptor_roundtrip() -> None:
-    descriptor = PluginDescriptor(
+def descriptor(**overrides) -> PluginDescriptor:
+    defaults = dict(
         name="llm",
-        version="1.2.3",
-        module="langharness_core.plugins.llm",
-        factory="llm-factory",
-        instance="llm",
+        version="1.0.0",
+        module="langharness_core.plugins.llm.llm",
+        factory="llm-plugin-factory",
         specification="agent.plugin.llm",
-        ranking=10,
-        properties={"model": "fake"},
+        description=DESCRIPTION,
     )
-    assert PluginDescriptor.from_dict(descriptor.to_dict()) == descriptor
+    defaults.update(overrides)
+    return PluginDescriptor(**defaults)
 
 
-def test_registry_add_get_list_and_remove() -> None:
-    registry = PluginRegistry()
-    registry.add(make_descriptor("llm"))
-    registry.add(make_descriptor("tools"))
+class TestDescriptorFields:
+    def test_descriptor_has_exactly_seven_fields(self) -> None:
+        assert len(PluginDescriptor.__dataclass_fields__) == 7
+        assert descriptor().to_dict() == {
+            "name": "llm",
+            "version": "1.0.0",
+            "module": "langharness_core.plugins.llm.llm",
+            "factory": "llm-plugin-factory",
+            "specification": "agent.plugin.llm",
+            "description": DESCRIPTION,
+            "swap_policy": "restart",
+        }
 
-    assert registry.get("llm").version == "1.0.0"
-    assert [item.name for item in registry.list()] == ["llm", "tools"]
+    def test_from_dict_rejects_runtime_fields(self) -> None:
+        data = descriptor().to_dict()
+        data["instance"] = "llm"
+        data["scope"] = "server"
+        data["properties"] = {}
+        with pytest.raises(ValueError, match="Unknown descriptor fields"):
+            PluginDescriptor.from_dict(data)
 
-    removed = registry.remove("llm")
-    assert removed.name == "llm"
-    assert registry.get("llm") is None
-    assert [item.name for item in registry.list()] == ["tools"]
+    def test_from_dict_requires_description(self) -> None:
+        data = descriptor().to_dict()
+        del data["description"]
+        with pytest.raises(ValueError, match="Missing descriptor fields"):
+            PluginDescriptor.from_dict(data)
 
-
-def test_registry_rejects_duplicate_names() -> None:
-    registry = PluginRegistry([make_descriptor("llm")])
-    with pytest.raises(ValueError, match="already registered"):
-        registry.add(make_descriptor("llm"))
-
-
-def test_registry_rejects_duplicate_instance_but_allows_same_factory() -> None:
-    registry = PluginRegistry([make_descriptor("llm")])
-    duplicate_instance = make_descriptor("other-instance")
-    duplicate_instance.instance = "llm"
-    with pytest.raises(ValueError, match="instance"):
-        registry.add(duplicate_instance)
-
-    duplicate_factory = make_descriptor("other-factory")
-    duplicate_factory.factory = "llm-factory"
-    duplicate_factory.instance = "other-factory"
-    registry.add(duplicate_factory)
-    assert registry.get("other-factory") is duplicate_factory
+    def test_descriptor_is_frozen(self) -> None:
+        with pytest.raises(Exception):
+            descriptor().name = "other"  # type: ignore[misc]
 
 
-def test_registry_set_enabled() -> None:
-    registry = PluginRegistry([make_descriptor("llm")])
-    registry.set_enabled("llm", False)
-    assert registry.get("llm").enabled is False
+class TestDescriptorValidation:
+    def test_valid_descriptor_passes(self) -> None:
+        validate_descriptor(descriptor())
+
+    @pytest.mark.parametrize(
+        "field", ["name", "version", "module", "factory", "specification", "description"]
+    )
+    def test_empty_text_field_rejected(self, field: str) -> None:
+        with pytest.raises(ValueError, match="non-empty"):
+            validate_descriptor(descriptor(**{field: "  "}))
+
+    def test_invalid_swap_policy_rejected(self) -> None:
+        with pytest.raises(ValueError, match="swap_policy"):
+            validate_descriptor(descriptor(swap_policy="instant"))
 
 
-def test_registry_save_and_load(tmp_path: Path) -> None:
-    path = tmp_path / "plugins.json"
-    registry = PluginRegistry([make_descriptor("llm"), make_descriptor("tools")])
-    registry.save(path)
-
-    loaded = PluginRegistry.load(path)
-    assert [item.name for item in loaded.list()] == ["llm", "tools"]
-    assert loaded.get("tools").module == "langharness_core.plugins.tools"
-
-
-def test_registry_load_rejects_unknown_fields() -> None:
-    path = Path(__file__).with_name("bad_registry.json")
-    path.write_text('{"version":1,"plugins":[{"name":"x"}]}', encoding="utf-8")
-    with pytest.raises(ValueError):
-        PluginRegistry.load(path)
-    path.unlink()
-
-
-def test_descriptor_from_dict_rejects_unknown_fields() -> None:
-    with pytest.raises(ValueError, match="Unknown descriptor fields"):
-        PluginDescriptor.from_dict(
-            {
-                "name": "x",
-                "version": "1.0.0",
-                "module": "m",
-                "factory": "f",
-                "instance": "i",
-                "specification": "s",
-                "surprise": True,
-            }
+class TestInstanceRecord:
+    def test_record_round_trip(self) -> None:
+        record = PluginInstanceRecord(
+            "abc123",
+            "llm-plugin-factory",
+            "langharness_core.plugins.llm.llm",
+            ScopeId("agent:a"),
+            {"plugin.model.name": "gpt"},
+            enabled=False,
+            ranking=3,
+            status="disabled",
         )
+        assert PluginInstanceRecord.from_dict(record.to_dict()) == record
+
+    def test_record_defaults(self) -> None:
+        record = PluginInstanceRecord("u", "f", "m", ROOT_SCOPE_ID, {})
+        assert record.enabled is True
+        assert record.ranking == 0
+        assert record.status == "active"
 
 
-def test_registry_remove_missing_raises_key_error() -> None:
-    with pytest.raises(KeyError):
-        PluginRegistry().remove("missing")
+class TestRegistrationKey:
+    def test_key_is_structured_not_joined(self) -> None:
+        key = PluginRegistrationKey("f", "m", ScopeId("server"))
+        assert key.factory == "f" and key.module == "m"
+        assert key.scope_id == ScopeId("server")
+        assert key == PluginRegistrationKey("f", "m", ScopeId("server"))
+        assert hash(key) == hash(PluginRegistrationKey("f", "m", ScopeId("server")))
 
 
-def test_registry_set_enabled_missing_raises_key_error() -> None:
-    with pytest.raises(KeyError):
-        PluginRegistry().set_enabled("missing", True)
+class TestSnapshots:
+    def test_instance_snapshot_properties_are_read_only(self) -> None:
+        from langharness_plugin.registry import PluginInstanceSnapshot
+
+        snapshot = PluginInstanceSnapshot(
+            "u", "f", "m", ROOT_SCOPE_ID, {"k": "v"}, True, 0, "active"
+        )
+        assert isinstance(snapshot.properties, MappingProxyType)
+        assert snapshot.properties["k"] == "v"
+
+    def test_definition_snapshot_defaults_to_installed(self) -> None:
+        from langharness_plugin.registry import PluginDefinitionSnapshot
+
+        snapshot = PluginDefinitionSnapshot(descriptor(), True, descriptor().module, 0, ())
+        assert snapshot.status == "installed"
 
 
-def test_registry_load_rejects_unsupported_version(tmp_path: Path) -> None:
-    path = tmp_path / "plugins.json"
-    path.write_text('{"version":2,"plugins":[]}', encoding="utf-8")
-    with pytest.raises(ValueError, match="Unsupported"):
-        PluginRegistry.load(path)
-
-
-def test_registry_rejects_invalid_descriptor_values() -> None:
-    registry = PluginRegistry()
-    with pytest.raises(ValueError, match="text fields"):
-        registry.add(make_descriptor(" ").__class__(
-            name=" ",
+class TestPluginMetadata:
+    def test_decorator_stores_metadata_on_class(self) -> None:
+        @plugin_metadata(
+            name="echo",
             version="1.0.0",
-            module="m",
-            factory="f",
-            instance="i",
-            specification="s",
-        ))
+            factory="echo-factory",
+            specification="test.echo",
+            description="Echo plugin.",
+        )
+        class Echo:
+            pass
 
-    with pytest.raises(ValueError, match="enabled"):
-        bad = make_descriptor("bad-enabled")
-        bad.enabled = "yes"  # type: ignore[assignment]
-        registry.add(bad)
+        metadata = getattr(Echo, PLUGIN_METADATA_ATTR)
+        assert isinstance(metadata, PluginMetadata)
+        assert metadata.factory == "echo-factory"
 
-    with pytest.raises(ValueError, match="ranking"):
-        bad = make_descriptor("bad-ranking")
-        bad.ranking = "high"  # type: ignore[assignment]
-        registry.add(bad)
-
-
-def test_descriptor_swap_policy_defaults_to_restart() -> None:
-    descriptor = make_descriptor("llm")
-    assert descriptor.swap_policy == "restart"
-    assert PluginDescriptor.from_dict(descriptor.to_dict()).swap_policy == "restart"
+    def test_metadata_module_defaults_to_none(self) -> None:
+        metadata = PluginMetadata(
+            name="e", version="1", factory="f", specification="s", description="d"
+        )
+        assert metadata.module is None
+        assert SWAP_POLICIES == ("hot", "restart")
 
 
-def test_descriptor_swap_policy_roundtrip() -> None:
-    descriptor = make_descriptor("llm")
-    descriptor.swap_policy = "hot"
-    assert PluginDescriptor.from_dict(descriptor.to_dict()).swap_policy == "hot"
+class TestPluginRegistry:
+    def test_registry_keyed_by_factory_allows_duplicate_names(self) -> None:
+        from langharness_plugin.registry import PluginRegistry
+
+        registry = PluginRegistry(
+            [
+                descriptor(factory="f-a", module="m.a"),
+                descriptor(factory="f-b", module="m.b"),
+            ]
+        )
+        assert registry.get("f-a") is not None
+        assert registry.get("f-b") is not None
+        assert len(registry.list()) == 2
+
+    def test_registry_rejects_duplicate_factory(self) -> None:
+        from langharness_plugin.errors import PluginIdentityConflictError
+        from langharness_plugin.registry import PluginRegistry
+
+        registry = PluginRegistry([descriptor(factory="f", module="m.a")])
+        with pytest.raises(PluginIdentityConflictError, match="f"):
+            registry.add(descriptor(factory="f", module="m.b"))
+
+    def test_registry_get_by_name_raises_ambiguity(self) -> None:
+        from langharness_plugin.errors import AmbiguousPluginError
+        from langharness_plugin.registry import PluginRegistry
+
+        registry = PluginRegistry(
+            [
+                descriptor(factory="f-a", module="m.a"),
+                descriptor(factory="f-b", module="m.b"),
+            ]
+        )
+        with pytest.raises(AmbiguousPluginError) as caught:
+            registry.get_by_name("llm")
+        assert set(caught.value.candidates) == {"f-a", "f-b"}
+
+    def test_registry_get_by_name_unique_returns_descriptor(self) -> None:
+        from langharness_plugin.registry import PluginRegistry
+
+        registry = PluginRegistry([descriptor(factory="f-a", module="m.a")])
+        assert registry.get_by_name("llm").factory == "f-a"
+        with pytest.raises(KeyError):
+            registry.get_by_name("missing")
+
+    def test_registry_remove_by_factory(self) -> None:
+        from langharness_plugin.registry import PluginRegistry
+
+        registry = PluginRegistry([descriptor(factory="f-a", module="m.a")])
+        removed = registry.remove("f-a")
+        assert removed.factory == "f-a"
+        assert registry.get("f-a") is None
+        with pytest.raises(KeyError):
+            registry.remove("f-a")
+
+    def test_registry_add_validates_descriptor(self) -> None:
+        from langharness_plugin.registry import PluginRegistry
+
+        registry = PluginRegistry()
+        with pytest.raises(ValueError, match="non-empty"):
+            registry.add(descriptor(description="  "))
 
 
-def test_registry_rejects_invalid_swap_policy() -> None:
-    registry = PluginRegistry()
-    bad = make_descriptor("bad-swap")
-    bad.swap_policy = "sometimes"  # type: ignore[assignment]
-    with pytest.raises(ValueError, match="swap_policy"):
-        registry.add(bad)
+
+class TestRegistryPersistence:
+    def test_save_and_load_round_trip(self, tmp_path) -> None:
+        from langharness_plugin.registry import PluginRegistry
+
+        registry = PluginRegistry(
+            [descriptor(factory="f-a", module="m.a")]
+        )
+        path = tmp_path / "registry.json"
+        registry.save(path)
+        loaded = PluginRegistry.load(path)
+        assert loaded.get("f-a") is not None
+        assert loaded.list() == registry.list()
+
+    def test_load_rejects_unsupported_version(self, tmp_path) -> None:
+        import json
+
+        from langharness_plugin.registry import PluginRegistry
+
+        path = tmp_path / "registry.json"
+        path.write_text(json.dumps({"version": 99, "plugins": []}))
+        with pytest.raises(ValueError, match="Unsupported"):
+            PluginRegistry.load(path)

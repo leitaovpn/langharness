@@ -7,25 +7,33 @@ import os
 import sys
 from argparse import ArgumentParser, Namespace
 from collections.abc import Iterable
-from dataclasses import replace
+from dataclasses import dataclass
 from importlib import import_module
 from importlib.metadata import EntryPoint, entry_points
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from langharness.api_guard import APIGuard
-from langharness_api.common.server import _apply_agent_configs
 from langharness_api.contracts import SPEC_SERVER_SERVER, ServerServerProvider
 from langharness_cli.contracts import SPEC_UI_SERVER, UIServerProvider
 from langharness_config.contracts import SPEC_CONFIGS, Configs
-from langharness_plugin.config_store import apply_overrides, load_overrides
+from langharness_plugin.config_store import load_overrides, merge_overrides
 from langharness_plugin.contracts import DynamicPluginManager
 from langharness_plugin.coordinator import RuntimeMutationCoordinator
 from langharness_plugin.discovery import PluginDiscovery
 from langharness_plugin.package import PluginPackage
 from langharness_plugin.plugin_manager import PluginManager
 from langharness_plugin.registry import PluginDescriptor, PluginRegistry
-from langharness_plugin.state_store import SqliteRuntimeStateStore
+from langharness_plugin.scope_const import (
+    AGENT_SCOPE_ID,
+    SERVER_SCOPE_ID,
+    UI_SCOPE_ID,
+)
+from langharness_plugin.state_store import (
+    SqlitePluginHistoryStore,
+    SqliteRuntimeStateStore,
+)
+from langharness_scope import ROOT_SCOPE_ID, ScopeId
 
 LOGGER = logging.getLogger("langharness.bootstrap")
 CONFIG_ENTRY_POINT_GROUP = "langharness.config"
@@ -39,9 +47,54 @@ DEFAULT_PACKAGE_PATHS = {
     "log": "langharness_logging.plugin:builtin_package",
 }
 
+TARGET_SCOPES = {
+    "root": ROOT_SCOPE_ID,
+    "ui": UI_SCOPE_ID,
+    "server": SERVER_SCOPE_ID,
+    "agent": AGENT_SCOPE_ID,
+}
+
+UI_LOCALE_NAMES = {
+    "ui-server",
+    "cli-health",
+    "cli-model",
+    "cli-rich-renderer",
+    "cli-session",
+    "cli-plugins",
+    "cli-scope",
+    "cli-shell",
+}
+
+LOG_NAMES = {"server-log", "cli-log", "api-log"}
+
+PATH_PROPERTIES = {
+    "sqlite-checkpointer": (
+        "plugin.checkpoint.path",
+        "langharness_checkpoints.sqlite3",
+    ),
+    "session-index": ("plugin.sessions.path", "sessions.sqlite3"),
+    "agent-registry": ("plugin.agents.path", "agents.json"),
+}
+
+API_DEFAULTS: dict[str, dict[str, Any]] = {
+    "api-auth": {"plugin.token": "secret"},
+    "api-rate-limit": {"plugin.limit": 100},
+}
+
 
 class BootstrapError(RuntimeError):
     """Raised when configured module assembly cannot be loaded."""
+
+
+@dataclass(frozen=True, slots=True)
+class AssemblyRequest:
+    """One builtin definition to install plus one instance to reconcile."""
+
+    name: str  # contribution id: stable identity for config keys
+    descriptor: PluginDescriptor
+    scope_id: ScopeId
+    properties: dict[str, Any]
+    enabled: bool = True
 
 
 def parse_options(argv: list[str]) -> tuple[Namespace, list[str]]:
@@ -129,30 +182,31 @@ def _discover_config_package(config_dir: str) -> PluginPackage:
     return package
 
 
-def _configured_descriptor(
+def _default_properties(
     descriptor: PluginDescriptor,
     *,
+    name: str,
     config_dir: str,
     locale: str,
-) -> PluginDescriptor:
-    properties = dict(descriptor.properties)
-    if descriptor.name == "config-toml":
+) -> dict[str, Any]:
+    """Code-built default properties for one builtin assembly request."""
+    properties: dict[str, Any] = {}
+    if name == "config-toml":
         properties["plugin.config.path"] = str(Path(config_dir) / "langharness.toml")
-    if "plugin.log.directory" in properties:
-        properties["plugin.log.directory"] = config_dir
-    if descriptor.name == "api-plugins":
+    if name == "api-plugins":
         properties["plugin.config_dir"] = config_dir
-    path_properties = {
-        "sqlite-checkpointer": ("plugin.checkpoint.path", "langharness_checkpoints.sqlite3"),
-        "session-index": ("plugin.sessions.path", "sessions.sqlite3"),
-        "agent-registry": ("plugin.agents.path", "agents.json"),
-    }
-    if descriptor.name in path_properties:
-        key, filename = path_properties[descriptor.name]
-        properties[key] = str(Path(config_dir) / filename)
-    if "plugin.ui.locale" in properties:
+    if name in LOG_NAMES:
+        from langharness_logging.plugin import log_properties
+
+        properties.update(log_properties(name.split("-", 1)[0], config_dir))
+    if name in UI_LOCALE_NAMES:
         properties["plugin.ui.locale"] = locale
-    return replace(descriptor, properties=properties)
+    if name in PATH_PROPERTIES:
+        key, filename = PATH_PROPERTIES[name]
+        properties[key] = str(Path(config_dir) / filename)
+    if name in API_DEFAULTS:
+        properties.update(API_DEFAULTS[name])
+    return properties
 
 
 def base_url_for(options: Namespace) -> str:
@@ -169,58 +223,73 @@ def base_url_for(options: Namespace) -> str:
     return f"http://{host}:{options.server_port}"
 
 
-def _descriptors(
+def _assembly_requests(
     packages: Iterable[PluginPackage],
     *,
     config_dir: str,
     locale: str,
     override_scope: str,
     base_url: str,
-) -> list[PluginDescriptor]:
+) -> list[AssemblyRequest]:
     overrides = load_overrides(config_dir, override_scope)
-    result: list[PluginDescriptor] = []
+    requests: list[AssemblyRequest] = []
     seen: set[str] = set()
     for package in packages:
         for contribution in package.contributions:
-            descriptor = _configured_descriptor(
-                contribution.descriptor, config_dir=config_dir, locale=locale
+            descriptor = contribution.descriptor
+            name = contribution.id  # stable identity of the assembly request
+            properties = _default_properties(
+                descriptor, name=name, config_dir=config_dir, locale=locale
             )
+            enabled = True
+            if name in overrides:
+                enabled, properties = merge_overrides(properties, overrides[name])
             if (
                 override_scope == "cli"
-                and descriptor.name == "server-log"
+                and name == "server-log"
                 or override_scope == "api"
-                and descriptor.name == "cli-log"
+                and name == "cli-log"
             ):
                 continue
-            if descriptor.name in seen:
+            if name in seen:
                 continue
-            seen.add(descriptor.name)
-            if descriptor.name in overrides:
-                descriptor = apply_overrides(descriptor, overrides[descriptor.name])
-            if descriptor.name in {"cli-health", "cli-plugins"}:
+            seen.add(name)
+            if name in {"cli-health", "cli-plugins"}:
                 # The launcher owns the connect address; rewrite after stored
                 # overrides so --server-ip/--server-port always win.
-                descriptor = replace(
-                    descriptor,
-                    properties={**descriptor.properties, "plugin.base_url": base_url},
-                )
-            result.append(descriptor)
-    return result
+                properties["plugin.base_url"] = base_url
+            scope_id = TARGET_SCOPES.get(contribution.target, ROOT_SCOPE_ID)
+            requests.append(
+                AssemblyRequest(name, descriptor, scope_id, properties, enabled)
+            )
+    return requests
 
 
 def _select_packages(config_package: PluginPackage, options: Namespace) -> list[PluginPackage]:
-    config_descriptors = _descriptors(
+    requests = _assembly_requests(
         [config_package],
         config_dir=options.config_dir,
         locale="en",
         override_scope="cli" if options.mode in {"ui", "all"} else "api",
         base_url=base_url_for(options),
     )
-    manager = PluginManager(PluginRegistry(config_descriptors))
+    manager = PluginManager(PluginRegistry())
     manager.start()
     try:
-        for descriptor in config_descriptors:
-            manager.install_plugin(descriptor)
+        installed: set[tuple[str, str]] = set()
+        for request in requests:
+            key = (request.descriptor.module, request.descriptor.factory)
+            if key not in installed:
+                manager.install_descriptor(request.descriptor)
+                installed.add(key)
+        for request in requests:
+            manager.create_instance(
+                request.descriptor.factory,
+                request.descriptor.module,
+                request.scope_id,
+                properties=request.properties,
+                enabled=request.enabled,
+            )
         configs = cast(Configs | None, manager.get_service(SPEC_CONFIGS))
         if configs is None:
             raise BootstrapError("Configuration package did not provide configs")
@@ -238,32 +307,48 @@ def _run(options: Namespace, remainder: list[str]) -> int:
     packages = [config_package, *_select_packages(config_package, options)]
     locale = "en"
     base_url = base_url_for(options)
-    descriptors = _descriptors(
+    requests = _assembly_requests(
         packages,
         config_dir=options.config_dir,
         locale=locale,
         override_scope="cli" if options.mode in {"ui", "all"} else "api",
         base_url=base_url,
     )
-    manager = PluginManager(PluginRegistry(descriptors))
+    manager = PluginManager(PluginRegistry())
     manager.start()
     try:
         coordinator: RuntimeMutationCoordinator | None = None
         if options.mode == "server":
+            state_path = Path(options.config_dir) / "runtime_state.sqlite3"
+            manager.bind_state(
+                SqliteRuntimeStateStore(state_path),
+                SqlitePluginHistoryStore(state_path),
+            )
             coordinator = RuntimeMutationCoordinator(
-                manager,
-                SqliteRuntimeStateStore(
-                    Path(options.config_dir) / "runtime_state.sqlite3"
-                ),
-                PluginDiscovery(),
+                manager, discovery=PluginDiscovery()
             )
             manager.register_runtime_service(DynamicPluginManager, coordinator)
-        for descriptor in descriptors:
-            manager.install_plugin(descriptor)
+        installed: set[tuple[str, str]] = set()
         if coordinator is not None:
+            manager.discover()
             coordinator.rescan()
             coordinator.restore()
+            from langharness_api.common.server import _apply_agent_configs
+
             _apply_agent_configs(manager, options.config_dir)
+        for request in requests:
+            key = (request.descriptor.module, request.descriptor.factory)
+            if key not in installed:
+                manager.install_descriptor(request.descriptor, source="assembly")
+                installed.add(key)
+        for request in requests:
+            manager.ensure_instance(
+                request.descriptor.factory,
+                request.descriptor.module,
+                request.scope_id,
+                properties=request.properties,
+                enabled=request.enabled,
+            )
         if options.mode == "server":
             server_service = cast(
                 ServerServerProvider | None, manager.get_service(SPEC_SERVER_SERVER)
@@ -284,7 +369,7 @@ def _run(options: Namespace, remainder: list[str]) -> int:
                 "argv": remainder,
                 "base_url": base_url,
                 "config_dir": options.config_dir,
-                "descriptors": descriptors,
+                "descriptors": [request.descriptor for request in requests],
                 "manager": manager,
             }
         )

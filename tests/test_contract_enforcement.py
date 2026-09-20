@@ -18,6 +18,7 @@ from langharness_plugin.validation import (
     Violation,
     service_contract,
 )
+from langharness_scope import ROOT_SCOPE_ID
 
 
 @service_contract("test.enforce.tool")
@@ -41,8 +42,11 @@ def _descriptor(specification: str) -> PluginDescriptor:
         version="1.0.0",
         module="module.probe",
         factory="probe-factory",
-        instance="probe",
         specification=specification,
+        description=(
+            "Contract enforcement probe. Implements a test specification. "
+            "No properties. Uninstall after tests."
+        ),
     )
 
 
@@ -56,35 +60,37 @@ def _manager_with_instance(instance: Any) -> PluginManager:
     return manager
 
 
-def test_install_rejects_non_conforming_component() -> None:
+def test_create_instance_rejects_non_conforming_component() -> None:
     manager = _manager_with_instance(NonConforming())
+    manager.install_descriptor(_descriptor("test.enforce.tool"))
 
     with pytest.raises(ContractViolationError) as excinfo:
-        manager.install_plugin(_descriptor("test.enforce.tool"))
+        manager.create_instance("probe-factory", "module.probe", ROOT_SCOPE_ID)
 
     assert excinfo.value.plugin == "probe"
     assert "PARAM_EXTRA_REQUIRED" in str(excinfo.value)
-    manager._ipopo.kill.assert_called_once_with("probe")
-    assert "probe" not in manager._bound
+    manager._ipopo.kill.assert_called_once()
+    assert manager._instances == {}
     assert manager._ipopo.instantiate.call_count == 1
 
 
-def test_install_accepts_conforming_component() -> None:
+def test_create_instance_accepts_conforming_component() -> None:
     manager = _manager_with_instance(Conforming())
+    manager.install_descriptor(_descriptor("test.enforce.tool"))
 
-    manager.install_plugin(_descriptor("test.enforce.tool"))
+    snapshot = manager.create_instance("probe-factory", "module.probe", ROOT_SCOPE_ID)
 
-    assert manager.installed_names() == {"probe"}
-    assert "probe" in manager._bound
+    assert manager.get_instance(snapshot.instance).status == "active"
     manager._ipopo.kill.assert_not_called()
 
 
-def test_install_skips_unpinned_specification() -> None:
+def test_create_instance_skips_unpinned_specification() -> None:
     manager = _manager_with_instance(NonConforming())
+    manager.install_descriptor(_descriptor("test.enforce.unpinned"))
 
-    manager.install_plugin(_descriptor("test.enforce.unpinned"))
+    snapshot = manager.create_instance("probe-factory", "module.probe", ROOT_SCOPE_ID)
 
-    assert "probe" in manager._bound
+    assert snapshot.status == "active"
     manager._ipopo.kill.assert_not_called()
 
 

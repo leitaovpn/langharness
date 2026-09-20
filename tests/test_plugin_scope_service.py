@@ -1,6 +1,6 @@
 """Unit tests for the scoped plugin registrar service."""
 # mypy: ignore-errors
-# pyright: reportAttributeAccessIssue=false, reportOptionalMemberAccess=false
+# pyright: reportArgumentType=false, reportAttributeAccessIssue=false, reportOptionalMemberAccess=false
 
 from __future__ import annotations
 
@@ -18,6 +18,13 @@ from langharness_plugin.contracts import (
 from langharness_plugin.plugin_manager import PluginManager
 from langharness_plugin.registry import PluginDescriptor, PluginRegistry
 from langharness_plugin.validation import contract_for, service_contract
+from langharness_scope import ROOT_SCOPE_ID
+
+DESCRIPTION = (
+    "Scoped test plugin. Implements test.scope.service. Properties: "
+    "plugin.mode. Requires a restart for property changes. Uninstall "
+    "when tests finish."
+)
 
 
 @service_contract("test.scope.service")
@@ -30,18 +37,19 @@ class _Conforming:
         return []
 
 
-def descriptor() -> PluginDescriptor:
+def descriptor(swap_policy: str = "restart") -> PluginDescriptor:
     return PluginDescriptor(
         name="scoped",
         version="1.0.0",
         module="module.scoped",
         factory="scoped-factory",
-        instance="scoped",
         specification="test.scope.service",
+        description=DESCRIPTION,
+        swap_policy=swap_policy,
     )
 
 
-def make_manager(*, started: bool = True) -> PluginManager:
+def make_manager(*, started: bool = True, policy: str = "restart") -> PluginManager:
     manager = PluginManager(PluginRegistry())
     manager._framework = Mock()
     manager._context = Mock()
@@ -49,17 +57,19 @@ def make_manager(*, started: bool = True) -> PluginManager:
     manager._context.install_bundle.return_value = Mock()
     if started:
         manager._ipopo.instantiate.return_value = _Conforming()
-        manager.install_plugin(descriptor())
+        manager.install_descriptor(descriptor(swap_policy=policy))
         manager._ipopo.instantiate.reset_mock()
         manager._ipopo.instantiate.return_value = _Conforming()
     return manager
 
 
-def scoped_descriptor(**properties: Any) -> PluginDescriptor:
-    item = descriptor()
-    item.instance = "scoped@ag1"
-    item.properties = properties
-    return item
+def make_scoped_instance(
+    manager: PluginManager, **properties: Any
+):
+    return manager.create_instance(
+        "scoped-factory", "module.scoped", ROOT_SCOPE_ID,
+        properties=properties,
+    )
 
 
 def test_scoped_registrar_contract_is_pinned() -> None:
@@ -131,89 +141,102 @@ def test_find_services_passes_scope_filter_and_returns_all_matches() -> None:
     "bad_filter",
     ["(plugin.agent_id=ag1", "no parens at all", "(unbalanced))", ""],
 )
-def test_instantiate_instance_rejects_malformed_filters(bad_filter: str) -> None:
+def test_create_instance_rejects_malformed_filters(bad_filter: str) -> None:
     manager = make_manager()
-    item = scoped_descriptor(
-        **{"requires.filters": {"_llm_provider": bad_filter}}
-    )
 
     with pytest.raises(ValueError, match="filter"):
-        manager.instantiate_instance(item)
+        manager.create_instance(
+            "scoped-factory", "module.scoped", ROOT_SCOPE_ID,
+            properties={"requires.filters": {"_llm_provider": bad_filter}},
+        )
 
     manager._ipopo.instantiate.assert_not_called()
 
 
-def test_instantiate_instance_rejects_invalid_filter_shapes() -> None:
+def test_create_instance_rejects_invalid_filter_shapes() -> None:
     manager = make_manager()
-    item = scoped_descriptor(**{"requires.filters": "not-a-dict"})
 
     with pytest.raises(ValueError, match="filters"):
-        manager.instantiate_instance(item)
+        manager.create_instance(
+            "scoped-factory", "module.scoped", ROOT_SCOPE_ID,
+            properties={"requires.filters": "not-a-dict"},
+        )
 
 
-def test_instantiate_instance_rejects_non_text_filter_values() -> None:
+def test_create_instance_rejects_non_text_filter_values() -> None:
     manager = make_manager()
-    item = scoped_descriptor(**{"requires.filters": {"_llm_provider": 42}})
 
     with pytest.raises(ValueError, match="filter"):
-        manager.instantiate_instance(item)
+        manager.create_instance(
+            "scoped-factory", "module.scoped", ROOT_SCOPE_ID,
+            properties={"requires.filters": {"_llm_provider": 42}},
+        )
 
 
-def test_instantiate_instance_accepts_valid_filters() -> None:
+def test_create_instance_accepts_valid_filters() -> None:
     manager = make_manager()
     manager._ipopo.instantiate.return_value = _Conforming()
-    item = scoped_descriptor(
-        **{
+
+    manager.create_instance(
+        "scoped-factory", "module.scoped", ROOT_SCOPE_ID,
+        properties={
             "plugin.agent_id": "ag1",
             "requires.filters": {"_llm_provider": "(plugin.agent_id=ag1)"},
-        }
+        },
     )
-
-    manager.instantiate_instance(item)
 
     manager._ipopo.instantiate.assert_called_once()
 
 
-def test_apply_config_marks_hot_plugins_as_applied() -> None:
-    manager = make_manager()
-    manager.registry.get("scoped").swap_policy = "hot"
+def test_apply_config_applies_property_changes_in_place() -> None:
+    manager = make_manager(policy="hot")
+    snapshot = make_scoped_instance(manager)
+    manager._ipopo.reconfigure.return_value = None
 
     result = manager.apply_config(
         {"scoped": {"enabled": True, "properties": {"plugin.mode": "fast"}}}
     )
 
     assert result == {"applied": ["scoped"], "restart_required": []}
-    assert manager.registry.get("scoped").properties["plugin.mode"] == "fast"
+    assert manager.get_instance(snapshot.instance).properties["plugin.mode"] == "fast"
+    # UUID preserved through config application.
+    assert manager.get_instance(snapshot.instance).instance == snapshot.instance
 
 
-def test_apply_config_requires_restart_for_restart_plugins() -> None:
-    manager = make_manager()
-    before = manager.registry.get("scoped")
+def test_apply_config_restart_plugins_apply_immediately() -> None:
+    manager = make_manager(policy="restart")
+    snapshot = make_scoped_instance(manager)
+    manager._ipopo.instantiate.reset_mock()
+    manager._ipopo.instantiate.return_value = _Conforming()
 
     result = manager.apply_config(
         {"scoped": {"enabled": True, "properties": {"plugin.mode": "slow"}}}
     )
 
-    assert result == {"applied": [], "restart_required": ["scoped"]}
-    assert manager.registry.get("scoped").properties == before.properties
+    assert result == {"applied": ["scoped"], "restart_required": []}
+    assert manager.get_instance(snapshot.instance).properties["plugin.mode"] == "slow"
+    assert manager.get_instance(snapshot.instance).instance == snapshot.instance
 
 
-def test_apply_config_reports_unchanged_plugins_as_applied() -> None:
-    manager = make_manager()
-    result = manager.apply_config({"scoped": {"enabled": True}})
+def test_apply_config_reports_unchanged_plugins_as_not_applied() -> None:
+    manager = make_manager(policy="hot")
+    make_scoped_instance(manager)
+    manager._ipopo.reconfigure.return_value = None
+    result = manager.apply_config({"scoped": {"enabled": True, "properties": {}}})
     assert result == {"applied": [], "restart_required": []}
 
 
 def test_apply_config_reverts_removed_overrides() -> None:
-    manager = make_manager()
-    manager.registry.get("scoped").swap_policy = "hot"
-    manager.apply_config({"scoped": {"properties": {"plugin.mode": "fast"}}})
-    assert manager.registry.get("scoped").properties["plugin.mode"] == "fast"
+    manager = make_manager(policy="hot")
+    snapshot = make_scoped_instance(manager, **{"plugin.mode": "fast"})
+    manager._ipopo.reconfigure.return_value = None
 
-    result = manager.apply_config({})
+    result = manager.apply_config(
+        {"scoped": {"enabled": True, "properties": {}}}
+    )
 
     assert result == {"applied": ["scoped"], "restart_required": []}
-    assert "plugin.mode" not in manager.registry.get("scoped").properties
+    assert "plugin.mode" not in manager.get_instance(snapshot.instance).properties
 
 
 def test_apply_config_rejects_unknown_plugins() -> None:
@@ -223,10 +246,11 @@ def test_apply_config_rejects_unknown_plugins() -> None:
 
 
 def test_apply_config_disables_hot_plugins() -> None:
-    manager = make_manager()
-    manager.registry.get("scoped").swap_policy = "hot"
+    manager = make_manager(policy="hot")
+    snapshot = make_scoped_instance(manager)
 
     result = manager.apply_config({"scoped": {"enabled": False}})
 
     assert result == {"applied": ["scoped"], "restart_required": []}
-    assert manager.registry.get("scoped").enabled is False
+    assert manager.get_instance(snapshot.instance).enabled is False
+    assert manager.get_instance(snapshot.instance).status == "disabled"

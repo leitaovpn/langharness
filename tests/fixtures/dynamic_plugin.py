@@ -45,10 +45,12 @@ def create_dynamic_plugin(root: Path) -> Path:
                                 version="1.0.0",
                                 module="real_dynamic_plugin.echo",
                                 factory="real-echo-factory",
-                                instance="real-echo",
                                 specification=SPEC_TOOL_EXPORT_TARGET,
-                                scope="server",
-                                scope_parent="root",
+                                description=(
+                                    "Echoes text back to the user. Implements "
+                                    "plugin.tool_export.target. No properties. "
+                                    "Uninstall when the echo tools are not needed."
+                                ),
                             ),
                             tool_exports=(
                                 ToolExport(

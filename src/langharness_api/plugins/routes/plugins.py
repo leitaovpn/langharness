@@ -43,7 +43,7 @@ class RollbackRequest(BaseModel):
 class DynamicInstallRequest(BaseModel):
     package_id: str
     contribution_id: str
-    scope_id: str | None = None
+    scope_id: str
 
 
 class DynamicPropertiesRequest(BaseModel):
@@ -302,8 +302,7 @@ class PluginsRoutePlugin:
                     "module": item.descriptor.module,
                     "factory": item.descriptor.factory,
                     "specification": item.descriptor.specification,
-                    "enabled": item.descriptor.enabled,
-                    "scope": item.descriptor.scope,
+                    "description": item.descriptor.description,
                 }
                 for item in package.contributions
             ],
@@ -312,16 +311,15 @@ class PluginsRoutePlugin:
     @staticmethod
     def _registration_payload(registration: Any) -> dict[str, Any]:
         return {
-            "name": registration.descriptor.name,
             "package_id": registration.package_id,
             "contribution_id": registration.contribution_id,
-            "version": registration.package_version,
-            "scope_id": registration.scope_id,
+            "package_version": registration.package_version,
+            "instance": registration.instance,
+            "factory": registration.factory,
+            "module": registration.module,
+            "scope_id": str(registration.scope_id),
             "enabled": registration.enabled,
             "status": registration.status,
-            "module": registration.descriptor.module,
-            "specification": registration.descriptor.specification,
-            "scope": registration.descriptor.scope,
         }
 
     def _store(self, scope: str) -> PluginConfigStore:

@@ -460,11 +460,11 @@ class PluginCommandPlugin:
     ) -> None:
         def row(entry: dict[str, Any]) -> tuple[str, ...]:
             base = (
-                entry.get("name", "-"),
+                entry.get("factory", "-"),
                 "enabled" if entry.get("enabled", True) else "disabled",
                 entry.get("status", "-"),
                 f"{entry.get('package_id', '-')}/{entry.get('contribution_id', '-')}",
-                entry.get("specification", "-"),
+                entry.get("instance", "-"),
             )
             if scope is None:
                 return (str(entry.get("scope_id", "-")), *base)
@@ -473,15 +473,15 @@ class PluginCommandPlugin:
         self._table(
             f"Runtime plugins · {'all scopes' if scope is None else f'scope {scope}'}",
             (
-                "Scope", "Name", "State", "Status",
-                "Package / contribution", "Specification",
+                "Scope", "Factory", "State", "Status",
+                "Package / contribution", "Instance",
             )
             if scope is None
             else (
-                "Name", "State", "Status",
-                "Package / contribution", "Specification",
+                "Factory", "State", "Status",
+                "Package / contribution", "Instance",
             ),
-            (row(entry) for entry in sorted(plugins, key=lambda item: str(item.get("name", "")))),
+            (row(entry) for entry in sorted(plugins, key=lambda item: str(item.get("factory", "")))),
         )
 
     def _config_table(self, scope: str, payload: dict[str, Any]) -> None:
@@ -536,13 +536,13 @@ class PluginCommandPlugin:
     def _registration_table(self, title: str, payload: dict[str, Any]) -> None:
         self._table(
             title,
-            ("Name", "Scope", "State", "Status", "Specification"),
+            ("Factory", "Scope", "State", "Status", "Instance"),
             ((
-                payload.get("name", "-"),
+                payload.get("factory", "-"),
                 payload.get("scope_id", "-"),
                 "enabled" if payload.get("enabled", True) else "disabled",
                 payload.get("status", "-"),
-                payload.get("specification", "-"),
+                payload.get("instance", "-"),
             ),),
         )
 

@@ -25,10 +25,12 @@ from langharness_core.plugin import (
     agent_loop_template_descriptor,
     agent_plugin_template_descriptor,
     agent_registry_descriptor,
+    agent_registry_properties,
 )
 from langharness_core.plugins.loop.agent_loop import PluginAgentLoop
 from langharness_plugin.plugin_manager import PluginManager
 from langharness_plugin.registry import PluginRegistry
+from langharness_plugin.scope_const import SERVER_SCOPE_ID
 
 
 class StaticModel(BaseChatModel):
@@ -158,21 +160,29 @@ def test_loop_survives_rebind_to_broken_llm_configuration(tmp_path: Any) -> None
         ),
         encoding="utf-8",
     )
-    registry = PluginRegistry(
-        [
+    manager = PluginManager(PluginRegistry())
+    manager.start()
+    try:
+        for descriptor in [
             agent_plugin_template_descriptor("llm"),
             agent_plugin_template_descriptor("tools"),
             agent_plugin_template_descriptor("name"),
             agent_loop_template_descriptor(),
-            agent_registry_descriptor(str(tmp_path)),
+            agent_registry_descriptor(),
             agent_directory_descriptor(),
-        ]
-    )
-    manager = PluginManager(registry)
-    manager.start()
-    try:
-        for item in registry.list():
-            manager.install_plugin(item)
+        ]:
+            manager.install_descriptor(descriptor)
+        manager.create_instance(
+            "agent-registry-plugin-factory",
+            "langharness_core.plugins.agents.registry",
+            SERVER_SCOPE_ID,
+            properties=agent_registry_properties(str(tmp_path)),
+        )
+        manager.create_instance(
+            "agent-directory-plugin-factory",
+            "langharness_core.plugins.agents.directory",
+            SERVER_SCOPE_ID,
+        )
         directory = manager.get_service(SPEC_AGENT_DIRECTORY)
         assert directory is not None
 

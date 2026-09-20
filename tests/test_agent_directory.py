@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import Any, cast
 
 import pytest
@@ -12,17 +13,21 @@ import pytest
 from langharness_core.contracts import (
     SPEC_AGENT_DIRECTORY,
     SPEC_AGENT_LOOP,
-    SPEC_LLM,
-    SPEC_NAME,
-    SPEC_TOOL,
     AgentDirectoryProvider,
 )
 from langharness_core.plugins.agents.directory import AgentDirectoryPlugin
 from langharness_plugin.contracts import SPEC_PLUGIN_SCOPE, ScopedPluginRegistrar
-from langharness_plugin.registry import PluginDescriptor
+from langharness_plugin.registry import PluginInstanceSnapshot
 from langharness_plugin.scope_const import AGENT_SCOPE_ID
 from langharness_plugin.validation import contract_for, validate
-from langharness_scope import ScopeId, ScopeTree
+from langharness_scope import ROOT_SCOPE_ID, Scope, ScopeId, ScopeTree
+
+FACTORIES = {
+    "tools": "workspace-tools-plugin-factory",
+    "name": "agent-name-plugin-factory",
+    "llm": "llm-plugin-factory",
+    "agent-loop": "agent-loop-factory",
+}
 
 
 def agent_record(
@@ -55,46 +60,105 @@ class FakeScope:
     def __init__(
         self, *, fail_on: str | None = None, modules: set[str] | None = None
     ) -> None:
-        self.instances: dict[str, PluginDescriptor] = {}
+        self.instances: dict[str, PluginInstanceSnapshot] = {}
         self.instance_scopes: dict[str, str] = {}
         self.killed: list[str] = []
         self.services: dict[tuple[str, str | None], Any] = {}
-        self.fail_on = fail_on
+        self.fail_on = fail_on  # factory name that fails to instantiate
         self.modules = INSTALLED_MODULES if modules is None else modules
         self.tree = ScopeTree()
+        self._counter = 0
 
     def installed_modules(self) -> set[str]:
         return set(self.modules)
 
-    def instantiate_instance(
+    def create_instance(
         self,
-        descriptor: PluginDescriptor,
-        *,
+        factory: str,
+        module: str,
         scope_id: ScopeId | None = None,
-        plugin_key: str | None = None,
-    ) -> None:
-        if self.fail_on is not None and descriptor.instance == self.fail_on:
-            raise ValueError(f"cannot instantiate {descriptor.instance}")
-        if descriptor.instance in self.instances:
-            raise ValueError(
-                f"Instance {descriptor.instance!r} is already instantiated"
-            )
-        self.instances[descriptor.instance] = descriptor
+        *,
+        properties: Mapping[str, Any] | None = None,
+        enabled: bool = True,
+        ranking: int = 0,
+    ) -> PluginInstanceSnapshot:
+        if self.fail_on is not None and factory == self.fail_on:
+            raise ValueError(f"cannot instantiate {factory}")
+        self._counter += 1
+        instance = f"uuid-{self._counter}"
+        snapshot = PluginInstanceSnapshot(
+            instance, factory, module, scope_id or ROOT_SCOPE_ID,
+            dict(properties or {}), enabled, ranking,
+            "active" if enabled else "disabled",
+        )
+        self.instances[instance] = snapshot
         if scope_id is not None:
-            self.instance_scopes[descriptor.instance] = str(scope_id)
+            self.instance_scopes[instance] = str(scope_id)
+        return snapshot
 
-    def ensure_scope(
+    def update_instance(
+        self,
+        instance: str,
+        *,
+        properties: Mapping[str, Any] | None = None,
+        enabled: bool | None = None,
+        ranking: int | None = None,
+    ) -> PluginInstanceSnapshot:
+        if instance not in self.instances:
+            raise KeyError(instance)
+        current = self.instances[instance]
+        merged = dict(current.properties)
+        if properties is not None:
+            merged.update(properties)
+        updated = PluginInstanceSnapshot(
+            instance, current.factory, current.module, current.scope_id,
+            merged,
+            current.enabled if enabled is None else enabled,
+            current.ranking if ranking is None else ranking,
+            current.status,
+        )
+        self.instances[instance] = updated
+        return updated
+
+    def get_instance(self, instance: str) -> PluginInstanceSnapshot:
+        return self.instances[instance]
+
+    def list_instance(
+        self,
+        *,
+        factory: str | None = None,
+        module: str | None = None,
+        scope_id: ScopeId | None = None,
+        enabled: bool | None = None,
+    ) -> tuple[PluginInstanceSnapshot, ...]:
+        return tuple(
+            item for item in self.instances.values()
+            if (factory is None or item.factory == factory)
+            and (module is None or item.module == module)
+            and (scope_id is None or item.scope_id == scope_id)
+            and (enabled is None or item.enabled == enabled)
+        )
+
+    def delete_instance(self, instance: str) -> None:
+        if instance not in self.instances:
+            raise KeyError(instance)
+        self.instances.pop(instance)
+        self.instance_scopes.pop(instance, None)
+        self.killed.append(instance)
+
+    def add_scope(
         self,
         scope_id: ScopeId,
         *,
         name: str,
         parent_id: ScopeId | None = None,
-    ) -> None:
+    ) -> Scope:
         if self.tree.get(scope_id) is None:
-            wanted_parent = parent_id or ScopeId("root")
+            wanted_parent = parent_id or ROOT_SCOPE_ID
             if self.tree.get(wanted_parent) is None:
                 self.tree.create(wanted_parent, str(wanted_parent))
             self.tree.create(scope_id, name, wanted_parent)
+        return cast(Scope, self.tree.get(scope_id))
 
     def scope_filter(self, scope_id: ScopeId) -> str:
         visible = self.tree.ancestors(scope_id, include_self=True)
@@ -104,12 +168,6 @@ class FakeScope:
 
     def remove_scope(self, scope_id: ScopeId, *, recursive: bool = False) -> None:
         self.tree.remove(scope_id, recursive=recursive)
-
-    def kill_instance(self, instance: str) -> None:
-        if instance not in self.instances:
-            raise KeyError(instance)
-        self.instances.pop(instance)
-        self.killed.append(instance)
 
     def find_service(self, specification: str, filter: str | None = None) -> Any:
         return self.services.get((specification, filter))
@@ -122,6 +180,11 @@ class FakeScope:
 
     def apply_config(self, overrides: dict[str, Any]) -> dict[str, list[str]]:
         return {"applied": sorted(overrides), "restart_required": []}
+
+    def by_factory(self, factory: str) -> list[PluginInstanceSnapshot]:
+        return [
+            item for item in self.instances.values() if item.factory == factory
+        ]
 
 
 class FakeRegistry:
@@ -198,6 +261,23 @@ def make_directory(
     return plugin
 
 
+def only(scope: FakeScope, factory: str) -> PluginInstanceSnapshot:
+    matches = scope.by_factory(factory)
+    assert len(matches) == 1, f"expected one {factory}, got {len(matches)}"
+    return matches[0]
+
+
+def with_agent_id(
+    scope: FakeScope, factory: str, agent_id: str
+) -> PluginInstanceSnapshot:
+    matches = [
+        item for item in scope.by_factory(factory)
+        if item.properties.get("plugin.agent_id") == agent_id
+    ]
+    assert len(matches) == 1, f"expected one {factory} for {agent_id}"
+    return matches[0]
+
+
 def test_directory_contract_is_pinned() -> None:
     assert SPEC_AGENT_DIRECTORY == "agent.directory"
     assert contract_for(SPEC_AGENT_DIRECTORY) is AgentDirectoryProvider
@@ -207,31 +287,29 @@ def test_directory_contract_is_pinned() -> None:
 
 def test_validate_materializes_default_plugins_and_loop() -> None:
     plugin = make_directory()
-    instances = plugin._scope.instances
+    scope = plugin._scope
 
-    assert set(instances) == {
-        "tools@simple_agent",
-        "name@simple_agent",
-        "agent-loop@simple_agent",
+    assert {item.factory for item in scope.instances.values()} == {
+        FACTORIES["tools"],
+        FACTORIES["name"],
+        FACTORIES["agent-loop"],
     }
-    tools = instances["tools@simple_agent"]
+    tools = only(scope, FACTORIES["tools"])
     assert tools.module == "langharness_core.plugins.tools.workspace"
-    assert tools.specification == SPEC_TOOL
     assert tools.properties["plugin.agent_id"] == "simple_agent"
     assert tools.properties["plugin.tools.root_dir"] == "."
 
-    name = instances["name@simple_agent"]
-    assert name.specification == SPEC_NAME
+    name = only(scope, FACTORIES["name"])
     assert name.properties["plugin.agent_name"] == "Simple Agent"
 
-    loop = instances["agent-loop@simple_agent"]
-    assert loop.specification == SPEC_AGENT_LOOP
+    loop = only(scope, FACTORIES["agent-loop"])
     assert loop.properties["plugin.agent_id"] == "simple_agent"
+    visibility = "(|(plugin.scope_id=agent:simple_agent)(plugin.scope_id=agent)(plugin.scope_id=root))"
     assert loop.properties["requires.filters"] == {
-        "_llm_provider": "(|(plugin.scope_id=agent:simple_agent)(plugin.scope_id=agent)(plugin.scope_id=root))",
-        "_scoped_llm_providers": "(|(plugin.scope_id=agent:simple_agent)(plugin.scope_id=agent)(plugin.scope_id=root))",
-        "_tool_providers": "(|(plugin.scope_id=agent:simple_agent)(plugin.scope_id=agent)(plugin.scope_id=root))",
-        "_name_provider": "(|(plugin.scope_id=agent:simple_agent)(plugin.scope_id=agent)(plugin.scope_id=root))",
+        "_llm_provider": visibility,
+        "_scoped_llm_providers": visibility,
+        "_tool_providers": visibility,
+        "_name_provider": visibility,
     }
 
 
@@ -276,10 +354,10 @@ def test_ensure_plugin_instance_creates_agent_scoped_llm() -> None:
 
     plugin.ensure_plugin_instance("simple_agent", "llm", properties)
 
-    descriptor = plugin._scope.instances["llm@simple_agent"]
-    assert descriptor.module == "langharness_core.plugins.llm.llm"
-    assert descriptor.specification == SPEC_LLM
-    assert descriptor.properties == {**properties, "plugin.agent_id": "simple_agent"}
+    snapshot = only(plugin._scope, FACTORIES["llm"])
+    assert snapshot.module == LLM_MODULE
+    assert snapshot.properties == {**properties, "plugin.agent_id": "simple_agent"}
+    assert snapshot.scope_id == ScopeId("agent:simple_agent")
     assert plugin.list_agents()[0]["plugins"] == ["llm", "name", "tools"]
 
 
@@ -291,22 +369,22 @@ def test_ensure_plugin_instance_is_idempotent_for_equal_configuration() -> None:
     plugin.ensure_plugin_instance("simple_agent", "llm", dict(properties))
 
     assert plugin._scope.killed == []
-    assert sorted(plugin._scope.instances) == [
-        "agent-loop@simple_agent",
-        "llm@simple_agent",
-        "name@simple_agent",
-        "tools@simple_agent",
-    ]
+    assert len(plugin._scope.by_factory(FACTORIES["llm"])) == 1
+    assert len(plugin._scope.instances) == 4
 
 
 def test_ensure_plugin_instance_replaces_changed_configuration() -> None:
     plugin = make_directory()
     plugin.ensure_plugin_instance("simple_agent", "llm", {"plugin.model.name": "one"})
+    old_uuid = only(plugin._scope, FACTORIES["llm"]).instance
     plugin.ensure_plugin_instance("simple_agent", "llm", {"plugin.model.name": "two"})
 
-    assert plugin._scope.killed == ["llm@simple_agent"]
-    descriptor = plugin._scope.instances["llm@simple_agent"]
-    assert descriptor.properties["plugin.model.name"] == "two"
+    # Replace semantics: the old component is torn down and a fresh UUID is
+    # created with the new configuration.
+    assert plugin._scope.killed == [old_uuid]
+    snapshot = only(plugin._scope, FACTORIES["llm"])
+    assert snapshot.instance != old_uuid
+    assert snapshot.properties["plugin.model.name"] == "two"
 
 
 def test_ensure_plugin_instance_rejects_unknown_agent() -> None:
@@ -342,13 +420,11 @@ def test_reload_tears_down_and_materializes_again() -> None:
 
     plugin.reload("simple_agent")
 
-    assert "agent-loop@simple_agent" in plugin._scope.killed
-    assert "tools@simple_agent" in plugin._scope.killed
-    assert "llm@simple_agent" in plugin._scope.killed
-    assert set(plugin._scope.instances) == {
-        "tools@simple_agent",
-        "name@simple_agent",
-        "agent-loop@simple_agent",
+    assert len(plugin._scope.killed) == 4  # loop + tools + name + llm
+    assert {item.factory for item in plugin._scope.instances.values()} == {
+        FACTORIES["tools"],
+        FACTORIES["name"],
+        FACTORIES["agent-loop"],
     }
     assert plugin.list_agents()[0]["plugins"] == ["name", "tools"]
 
@@ -357,24 +433,21 @@ def test_reload_without_agent_targets_every_materialized_agent() -> None:
     plugin = make_directory([agent_record("a1"), agent_record("a2")])
     plugin.reload()
 
-    assert "agent-loop@a1" in plugin._scope.killed
-    assert "agent-loop@a2" in plugin._scope.killed
-    assert set(plugin._scope.instances) == {
-        "tools@a1",
-        "name@a1",
-        "agent-loop@a1",
-        "tools@a2",
-        "name@a2",
-        "agent-loop@a2",
+    assert len(plugin._scope.killed) == 6
+    assert {item.factory for item in plugin._scope.instances.values()} == {
+        FACTORIES["tools"],
+        FACTORIES["name"],
+        FACTORIES["agent-loop"],
     }
+    assert len(plugin._scope.by_factory(FACTORIES["agent-loop"])) == 2
 
 
 def test_materialization_failure_is_contained() -> None:
-    scope = FakeScope(fail_on="name@simple_agent")
+    scope = FakeScope(fail_on=FACTORIES["name"])
     plugin = make_directory(scope=scope)
 
     assert plugin.list_agents()[0]["materialized"] is False
-    assert "tools@simple_agent" in scope.killed
+    assert len(scope.killed) == 1  # the tools instance rolled back
     assert plugin._scope.instances == {}
 
 
@@ -384,12 +457,12 @@ def test_bind_callbacks_materialize_and_release() -> None:
     plugin._scope = FakeScope()
 
     plugin._on_scope_bind("_scope", plugin._scope, None)
-    assert "tools@simple_agent" in plugin._scope.instances
+    assert len(plugin._scope.instances) == 3
 
     plugin._on_scope_unbind("_scope", plugin._scope, None)
     assert plugin._instances == {}
     assert plugin._loops == {}
-    assert plugin.list_agents()[0]["materialized"] is False
+    assert plugin._default_llm is None
 
 
 def test_apply_agent_config_honours_stored_bindings() -> None:
@@ -400,11 +473,14 @@ def test_apply_agent_config_honours_stored_bindings() -> None:
         {"tools": {"enabled": True, "properties": {"plugin.tools.root_dir": "/work"}}},
     )
 
-    assert set(plugin._scope.instances) == {"tools@simple_agent", "agent-loop@simple_agent"}
-    tools = plugin._scope.instances["tools@simple_agent"]
+    assert {item.factory for item in plugin._scope.instances.values()} == {
+        FACTORIES["tools"],
+        FACTORIES["agent-loop"],
+    }
+    tools = only(plugin._scope, FACTORIES["tools"])
     assert tools.properties["plugin.tools.root_dir"] == "/work"
     assert plugin.list_agents()[0]["plugins"] == ["tools"]
-    assert "name@simple_agent" in plugin._scope.killed
+    assert plugin._scope.killed  # the old name/tools/loop set was torn down
 
 
 def test_apply_agent_config_skips_disabled_bindings() -> None:
@@ -416,17 +492,19 @@ def test_apply_agent_config_skips_disabled_bindings() -> None:
             "name": {"enabled": True, "properties": {"plugin.agent_name": "Custom"}},
         },
     )
-    assert set(plugin._scope.instances) == {"name@simple_agent", "agent-loop@simple_agent"}
-    assert (
-        plugin._scope.instances["name@simple_agent"].properties["plugin.agent_name"]
-        == "Custom"
-    )
+    assert {item.factory for item in plugin._scope.instances.values()} == {
+        FACTORIES["name"],
+        FACTORIES["agent-loop"],
+    }
+    assert only(plugin._scope, FACTORIES["name"]).properties["plugin.agent_name"] == "Custom"
 
 
 def test_apply_agent_config_ignores_unknown_plugins() -> None:
     plugin = make_directory()
     plugin.apply_agent_config("simple_agent", {"warp": {"enabled": True}})
-    assert set(plugin._scope.instances) == {"agent-loop@simple_agent"}
+    assert {item.factory for item in plugin._scope.instances.values()} == {
+        FACTORIES["agent-loop"]
+    }
     assert plugin.list_agents()[0]["plugins"] == []
 
 
@@ -439,8 +517,8 @@ def test_ensure_plugin_instance_merges_stored_binding_properties() -> None:
 
     plugin.ensure_plugin_instance("simple_agent", "llm", {})
 
-    descriptor = plugin._scope.instances["llm@simple_agent"]
-    assert descriptor.properties["plugin.model.name"] == "stored-model"
+    snapshot = only(plugin._scope, FACTORIES["llm"])
+    assert snapshot.properties["plugin.model.name"] == "stored-model"
     assert plugin.binding_properties("simple_agent", "llm") == {
         "plugin.model.name": "stored-model"
     }
@@ -455,8 +533,8 @@ def test_ensure_plugin_instance_request_overrides_stored_defaults() -> None:
 
     plugin.ensure_plugin_instance("simple_agent", "llm", {"plugin.model.name": "asked"})
 
-    descriptor = plugin._scope.instances["llm@simple_agent"]
-    assert descriptor.properties == {
+    snapshot = only(plugin._scope, FACTORIES["llm"])
+    assert snapshot.properties == {
         "plugin.model.name": "asked",
         "plugin.model.base_url": "u",
         "plugin.agent_id": "simple_agent",
@@ -475,7 +553,7 @@ def test_remove_agent_tears_down_instances() -> None:
     plugin.remove_agent("simple_agent")
 
     assert plugin._scope.instances == {}
-    assert "agent-loop@simple_agent" in plugin._scope.killed
+    assert plugin._scope.killed
     assert plugin.get_loop("simple_agent") is None
     assert plugin._configs == {}
 
@@ -506,7 +584,7 @@ def test_bind_and_unbind_callbacks_guard_services() -> None:
 
     plugin._on_registry_bind("_registry", registry, None)
     plugin._on_scope_bind("_scope", scope, None)
-    assert "agent-loop@simple_agent" in scope.instances
+    assert len(scope.instances) == 3
 
     plugin._on_registry_unbind("_registry", registry, None)
     plugin._on_scope_unbind("_scope", scope, None)
@@ -523,10 +601,10 @@ def test_remove_agent_without_configuration_is_safe() -> None:
 def test_reload_of_unknown_agent_is_a_noop() -> None:
     plugin = make_directory()
     plugin.reload("ghost")
-    assert set(plugin._scope.instances) == {
-        "tools@simple_agent",
-        "name@simple_agent",
-        "agent-loop@simple_agent",
+    assert {item.factory for item in plugin._scope.instances.values()} == {
+        FACTORIES["tools"],
+        FACTORIES["name"],
+        FACTORIES["agent-loop"],
     }
 
 
@@ -542,9 +620,8 @@ def test_materialize_creates_agent_scope_default_llm_from_providers_default() ->
         )
     )
 
-    default = plugin._scope.instances["llm@default"]
-    assert default.module == "langharness_core.plugins.llm.llm"
-    assert default.specification == SPEC_LLM
+    default = only(plugin._scope, FACTORIES["llm"])
+    assert default.module == LLM_MODULE
     assert default.properties == {
         "plugin.model.name": "default-model",
         "plugin.model.api_key": "default-key",
@@ -552,12 +629,12 @@ def test_materialize_creates_agent_scope_default_llm_from_providers_default() ->
         "plugin.model.protocol": "responses",
     }
     assert "plugin.agent_id" not in default.properties
-    assert plugin._scope.instance_scopes["llm@default"] == str(AGENT_SCOPE_ID)
+    assert plugin._scope.instance_scopes[default.instance] == str(AGENT_SCOPE_ID)
 
 
 def test_default_llm_skipped_without_configs_service() -> None:
     plugin = make_directory()
-    assert "llm@default" not in plugin._scope.instances
+    assert plugin._scope.by_factory(FACTORIES["llm"]) == []
 
 
 def test_default_llm_skipped_when_providers_default_missing(
@@ -566,7 +643,7 @@ def test_default_llm_skipped_when_providers_default_missing(
     with caplog.at_level(logging.WARNING):
         plugin = make_directory(configs=FakeConfigs(None))
 
-    assert "llm@default" not in plugin._scope.instances
+    assert plugin._scope.by_factory(FACTORIES["llm"]) == []
     assert "Default model unavailable" in caplog.text
 
 
@@ -576,18 +653,18 @@ def test_default_llm_created_once_across_repeated_materialization() -> None:
     plugin._materialize_all()
     plugin._materialize_all()
 
-    assert list(plugin._scope.instances).count("llm@default") == 1
+    assert len(plugin._scope.by_factory(FACTORIES["llm"])) == 1
 
 
 def test_late_configs_bind_creates_default_llm() -> None:
     plugin = make_directory()
-    assert "llm@default" not in plugin._scope.instances
+    assert plugin._scope.by_factory(FACTORIES["llm"]) == []
 
     late_configs = FakeConfigs({"model": "late-model"})
     plugin._configs_service = late_configs
     plugin._on_configs_service_bind("_configs_service", late_configs, None)
 
-    default = plugin._scope.instances["llm@default"]
+    default = only(plugin._scope, FACTORIES["llm"])
     assert default.properties["plugin.model.name"] == "late-model"
 
 
@@ -598,10 +675,9 @@ def test_agent_specific_llm_coexists_with_agent_scope_default() -> None:
         "simple_agent", "llm", {"plugin.model.name": "agent-model"}
     )
 
-    own = plugin._scope.instances["llm@simple_agent"]
-    assert own.properties["plugin.agent_id"] == "simple_agent"
+    own = with_agent_id(plugin._scope, FACTORIES["llm"], "simple_agent")
     assert own.properties["plugin.model.name"] == "agent-model"
-    assert "llm@default" in plugin._scope.instances
+    assert len(plugin._scope.by_factory(FACTORIES["llm"])) == 2
 
 
 DEFAULT_PROVIDER = {
@@ -624,12 +700,12 @@ def test_default_llm_waits_for_llm_bundle_then_creates(
 ) -> None:
     scope = FakeScope(modules=REQUIRED_MODULES - {LLM_MODULE})
     plugin = make_directory(configs=FakeConfigs(DEFAULT_PROVIDER), scope=scope)
-    assert "llm@default" not in plugin._scope.instances
+    assert plugin._scope.by_factory(FACTORIES["llm"]) == []
 
     scope.modules.add(LLM_MODULE)
     plugin._materialize_all()
 
-    assert "llm@default" in plugin._scope.instances
+    assert len(plugin._scope.by_factory(FACTORIES["llm"])) == 1
     assert "Could not create the default LLM" not in caplog.text
 
 
@@ -639,8 +715,8 @@ def test_empty_llm_binding_inherits_providers_default() -> None:
         "simple_agent", {"llm": {"enabled": True, "properties": {}}}
     )
 
-    descriptor = plugin._scope.instances["llm@simple_agent"]
-    assert descriptor.properties == {**DEFAULT_PROVIDER_MAPPED, "plugin.agent_id": "simple_agent"}
+    snapshot = with_agent_id(plugin._scope, FACTORIES["llm"], "simple_agent")
+    assert snapshot.properties == {**DEFAULT_PROVIDER_MAPPED, "plugin.agent_id": "simple_agent"}
 
 
 def test_empty_llm_binding_without_default_is_skipped() -> None:
@@ -649,8 +725,8 @@ def test_empty_llm_binding_without_default_is_skipped() -> None:
         "simple_agent", {"llm": {"enabled": True, "properties": {}}}
     )
 
-    assert "llm@simple_agent" not in plugin._scope.instances
-    assert "agent-loop@simple_agent" in plugin._scope.instances
+    assert plugin._scope.by_factory(FACTORIES["llm"]) == []
+    assert plugin._scope.by_factory(FACTORIES["agent-loop"])
 
 
 def test_partial_llm_binding_fills_missing_fields_from_default() -> None:
@@ -660,14 +736,14 @@ def test_partial_llm_binding_fills_missing_fields_from_default() -> None:
         {"llm": {"enabled": True, "properties": {"plugin.model.name": "stored"}}},
     )
 
-    descriptor = plugin._scope.instances["llm@simple_agent"]
-    assert descriptor.properties["plugin.model.name"] == "stored"
-    assert descriptor.properties["plugin.model.api_key"] == "default-key"
+    snapshot = with_agent_id(plugin._scope, FACTORIES["llm"], "simple_agent")
+    assert snapshot.properties["plugin.model.name"] == "stored"
+    assert snapshot.properties["plugin.model.api_key"] == "default-key"
     assert (
-        descriptor.properties["plugin.model.base_url"]
+        snapshot.properties["plugin.model.base_url"]
         == "https://default.example/v1"
     )
-    assert descriptor.properties["plugin.model.protocol"] == "chat"
+    assert snapshot.properties["plugin.model.protocol"] == "chat"
 
 
 def test_llm_binding_materialization_waits_for_llm_bundle() -> None:
@@ -683,8 +759,7 @@ def test_llm_binding_materialization_waits_for_llm_bundle() -> None:
     scope.modules.add(LLM_MODULE)
     plugin._materialize_all()
 
-    assert "llm@simple_agent" in plugin._scope.instances
-    assert "llm@default" in plugin._scope.instances
+    assert len(plugin._scope.by_factory(FACTORIES["llm"])) == 2
 
 
 def test_ensure_plugin_instance_fills_missing_fields_from_default() -> None:
@@ -694,11 +769,11 @@ def test_ensure_plugin_instance_fills_missing_fields_from_default() -> None:
         "simple_agent", "llm", {"plugin.model.name": "request-model"}
     )
 
-    descriptor = plugin._scope.instances["llm@simple_agent"]
-    assert descriptor.properties["plugin.model.name"] == "request-model"
-    assert descriptor.properties["plugin.model.api_key"] == "default-key"
+    snapshot = with_agent_id(plugin._scope, FACTORIES["llm"], "simple_agent")
+    assert snapshot.properties["plugin.model.name"] == "request-model"
+    assert snapshot.properties["plugin.model.api_key"] == "default-key"
     assert (
-        descriptor.properties["plugin.model.base_url"]
+        snapshot.properties["plugin.model.base_url"]
         == "https://default.example/v1"
     )
 
@@ -708,4 +783,4 @@ def test_ensure_plugin_instance_skips_unconfigured() -> None:
 
     plugin.ensure_plugin_instance("simple_agent", "llm", {})
 
-    assert "llm@simple_agent" not in plugin._scope.instances
+    assert plugin._scope.by_factory(FACTORIES["llm"]) == []

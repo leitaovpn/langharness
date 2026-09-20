@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from langharness_api.contracts import (
     SPEC_API_SERVER,
     SPEC_AUTH,
@@ -16,6 +14,53 @@ from langharness_api.contracts import (
 from langharness_plugin.package import PluginContribution, PluginPackage
 from langharness_plugin.registry import PluginDescriptor
 
+DESCRIPTION_TEMPLATES = {
+    "api-auth": (
+        "Authenticates API requests. Implements api.plugin.auth. Properties: "
+        "plugin.token. Hot-swappable. Uninstall to disable authentication."
+    ),
+    "api-rate-limit": (
+        "Limits API request rates. Implements api.plugin.rate_limit. "
+        "Properties: plugin.limit. Hot-swappable. Uninstall to disable "
+        "rate limiting."
+    ),
+    "api-db": (
+        "Provides the API database connection. Implements api.plugin.db. "
+        "No properties. Uninstall to disable database access."
+    ),
+    "api-plugins": (
+        "Serves plugin management routes. Implements api.plugin.route. "
+        "Properties: plugin.config_dir. Requires a restart for property "
+        "changes. Uninstall to remove the plugin management API."
+    ),
+    "api-server": (
+        "Builds the FastAPI application. Implements api.plugin.api_server. "
+        "No properties. Do not uninstall while the API server runs."
+    ),
+    "server-server": (
+        "Runs the standalone server process. Implements api.plugin.server.server. "
+        "No properties. Uninstall to stop the server."
+    ),
+    "ui-sdk": (
+        "HTTP client SDK for the UI process. Implements api.plugin.ui_sdk. "
+        "No properties. Uninstall when the UI no longer calls the API."
+    ),
+}
+
+ROUTE_NAMES = {
+    "api-health",
+    "api-stream",
+    "api-resume",
+    "api-scopes",
+    "api-sessions",
+    "api-agents",
+}
+
+ROUTE_DESCRIPTION = (
+    "Serves one API route group. Implements api.plugin.route. No properties. "
+    "Requires a restart for property changes. Uninstall to remove the route."
+)
+
 
 def api_auth_descriptor() -> PluginDescriptor:
     return PluginDescriptor(
@@ -23,12 +68,9 @@ def api_auth_descriptor() -> PluginDescriptor:
         version="1.0.0",
         module="langharness_api.plugins.auth.auth",
         factory="api-auth-plugin-factory",
-        instance="api-auth",
         specification=SPEC_AUTH,
-        properties={"plugin.token": "secret"},
+        description=DESCRIPTION_TEMPLATES["api-auth"],
         swap_policy="hot",
-        scope="server",
-        scope_parent="root",
     )
 
 
@@ -38,12 +80,9 @@ def api_rate_limit_descriptor() -> PluginDescriptor:
         version="1.0.0",
         module="langharness_api.plugins.rate_limit.rate_limit",
         factory="api-rate-limit-plugin-factory",
-        instance="api-rate-limit",
         specification=SPEC_RATE_LIMIT,
-        properties={"plugin.limit": 100},
+        description=DESCRIPTION_TEMPLATES["api-rate-limit"],
         swap_policy="hot",
-        scope="server",
-        scope_parent="root",
     )
 
 
@@ -53,9 +92,8 @@ def api_db_descriptor() -> PluginDescriptor:
         version="1.0.0",
         module="langharness_api.plugins.db.db",
         factory="api-db-plugin-factory",
-        instance="api-db",
         specification=SPEC_DB,
-        scope="root",
+        description=DESCRIPTION_TEMPLATES["api-db"],
     )
 
 
@@ -65,10 +103,8 @@ def api_health_descriptor() -> PluginDescriptor:
         version="1.0.0",
         module="langharness_api.plugins.routes.health",
         factory="api-health-plugin-factory",
-        instance="api-health",
         specification=SPEC_ROUTE,
-        scope="server",
-        scope_parent="root",
+        description=ROUTE_DESCRIPTION,
     )
 
 
@@ -78,27 +114,30 @@ def api_stream_descriptor() -> PluginDescriptor:
         version="1.0.0",
         module="langharness_api.plugins.routes.stream",
         factory="api-stream-route-factory",
-        instance="api-stream",
         specification=SPEC_ROUTE,
-        scope="server",
-        scope_parent="root",
+        description=ROUTE_DESCRIPTION,
     )
 
+
 def api_resume_descriptor() -> PluginDescriptor:
-    return PluginDescriptor(name="api-resume", version="1.0.0", module="langharness_api.plugins.routes.resume", factory="api-resume-route-factory", instance="api-resume", specification=SPEC_ROUTE, scope="server", scope_parent="root")
+    return PluginDescriptor(
+        name="api-resume",
+        version="1.0.0",
+        module="langharness_api.plugins.routes.resume",
+        factory="api-resume-route-factory",
+        specification=SPEC_ROUTE,
+        description=ROUTE_DESCRIPTION,
+    )
 
 
-def api_plugins_descriptor(directory: str) -> PluginDescriptor:
+def api_plugins_descriptor() -> PluginDescriptor:
     return PluginDescriptor(
         name="api-plugins",
         version="1.0.0",
         module="langharness_api.plugins.routes.plugins",
         factory="api-plugins-route-factory",
-        instance="api-plugins",
         specification=SPEC_ROUTE,
-        properties={"plugin.config_dir": directory},
-        scope="server",
-        scope_parent="root",
+        description=DESCRIPTION_TEMPLATES["api-plugins"],
     )
 
 
@@ -108,10 +147,8 @@ def api_scopes_descriptor() -> PluginDescriptor:
         version="1.0.0",
         module="langharness_api.plugins.routes.scopes",
         factory="api-scopes-route-factory",
-        instance="api-scopes",
         specification=SPEC_ROUTE,
-        scope="server",
-        scope_parent="root",
+        description=ROUTE_DESCRIPTION,
     )
 
 
@@ -121,10 +158,8 @@ def api_sessions_descriptor() -> PluginDescriptor:
         version="1.0.0",
         module="langharness_api.plugins.routes.sessions",
         factory="api-sessions-route-factory",
-        instance="api-sessions",
         specification=SPEC_ROUTE,
-        scope="server",
-        scope_parent="root",
+        description=ROUTE_DESCRIPTION,
     )
 
 
@@ -134,10 +169,8 @@ def api_agents_descriptor() -> PluginDescriptor:
         version="1.0.0",
         module="langharness_api.plugins.routes.agents",
         factory="api-agents-route-factory",
-        instance="api-agents",
         specification=SPEC_ROUTE,
-        scope="server",
-        scope_parent="root",
+        description=ROUTE_DESCRIPTION,
     )
 
 
@@ -147,10 +180,8 @@ def api_server_descriptor() -> PluginDescriptor:
         version="1.0.0",
         module="langharness_api.plugins.server.app",
         factory="api-server-factory",
-        instance="api-server",
         specification=SPEC_API_SERVER,
-        scope="server",
-        scope_parent="root",
+        description=DESCRIPTION_TEMPLATES["api-server"],
     )
 
 
@@ -160,10 +191,8 @@ def server_server_descriptor() -> PluginDescriptor:
         version="1.0.0",
         module="langharness_api.plugins.server.runtime",
         factory="server-server-factory",
-        instance="server-server",
         specification=SPEC_SERVER_SERVER,
-        scope="server",
-        scope_parent="root",
+        description=DESCRIPTION_TEMPLATES["server-server"],
     )
 
 
@@ -173,10 +202,8 @@ def ui_sdk_descriptor() -> PluginDescriptor:
         version="1.0.0",
         module="langharness_api.plugins.sdk.http",
         factory="http-ui-sdk-factory",
-        instance="ui-sdk",
         specification=SPEC_UI_SDK,
-        scope="ui",
-        scope_parent="root",
+        description=DESCRIPTION_TEMPLATES["ui-sdk"],
     )
 
 
@@ -184,32 +211,27 @@ def sdk_package() -> PluginPackage:
     return PluginPackage(
         id="builtin.api.sdk",
         version="1.0.0",
-        contributions=(PluginContribution("sdk", "ui", ui_sdk_descriptor()),),
+        contributions=(PluginContribution("ui-sdk", "ui", ui_sdk_descriptor()),),
     )
 
 
 def builtin_package() -> PluginPackage:
     """Describe the API plugins already installed by the server assembly."""
-    directory = str(Path.home() / ".langharness")
     return PluginPackage(
         id="builtin.api",
         version="1.0.0",
         contributions=(
-            PluginContribution("auth", "server", api_auth_descriptor()),
-            PluginContribution("rate-limit", "server", api_rate_limit_descriptor()),
-            PluginContribution("db", "root", api_db_descriptor()),
-            PluginContribution("health", "server", api_health_descriptor()),
-            PluginContribution("stream", "server", api_stream_descriptor()),
-            PluginContribution("resume", "server", api_resume_descriptor()),
-            PluginContribution(
-                "plugins", "server", api_plugins_descriptor(directory)
-            ),
-            PluginContribution("scopes", "server", api_scopes_descriptor()),
-            PluginContribution("sessions", "server", api_sessions_descriptor()),
-            PluginContribution("agents", "server", api_agents_descriptor()),
-            PluginContribution("server", "server", api_server_descriptor()),
-            PluginContribution(
-                "server-runtime", "server", server_server_descriptor()
-            ),
+            PluginContribution("api-auth", "server", api_auth_descriptor()),
+            PluginContribution("api-rate-limit", "server", api_rate_limit_descriptor()),
+            PluginContribution("api-db", "root", api_db_descriptor()),
+            PluginContribution("api-health", "server", api_health_descriptor()),
+            PluginContribution("api-stream", "server", api_stream_descriptor()),
+            PluginContribution("api-resume", "server", api_resume_descriptor()),
+            PluginContribution("api-plugins", "server", api_plugins_descriptor()),
+            PluginContribution("api-scopes", "server", api_scopes_descriptor()),
+            PluginContribution("api-sessions", "server", api_sessions_descriptor()),
+            PluginContribution("api-agents", "server", api_agents_descriptor()),
+            PluginContribution("api-server", "server", api_server_descriptor()),
+            PluginContribution("server-server", "server", server_server_descriptor()),
         ),
     )

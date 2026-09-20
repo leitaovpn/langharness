@@ -23,9 +23,12 @@ from langharness_core.plugin import (
     agent_loop_template_descriptor,
     agent_plugin_template_descriptor,
     agent_registry_descriptor,
+    agent_registry_properties,
 )
 from langharness_plugin.plugin_manager import PluginManager
 from langharness_plugin.registry import PluginRegistry
+from langharness_plugin.scope_const import SERVER_SCOPE_ID
+from langharness_scope import ROOT_SCOPE_ID
 
 DEFAULT_TOML = """
 [providers.default]
@@ -82,23 +85,42 @@ def _write_agent(path: Any) -> None:
 def _manager(tmp_path: Any) -> PluginManager:
     (tmp_path / "langharness.toml").write_text(DEFAULT_TOML, encoding="utf-8")
     _write_agent(tmp_path / "agents.json")
-    registry = PluginRegistry(
-        [
-            *config_descriptors(str(tmp_path)),
-            agent_registry_descriptor(str(tmp_path)),
-            agent_directory_descriptor(),
-            # Templates install after the directory in the real bootstrap, so
-            # the default LLM must wait for the llm bundle instead of failing.
-            agent_plugin_template_descriptor("llm"),
-            agent_plugin_template_descriptor("tools"),
-            agent_plugin_template_descriptor("name"),
-            agent_loop_template_descriptor(),
-        ]
-    )
-    manager = PluginManager(registry)
+    manager = PluginManager(PluginRegistry())
     manager.start()
-    for item in registry.list():
-        manager.install_plugin(item)
+    for descriptor in [
+        *config_descriptors(),
+        agent_registry_descriptor(),
+        agent_directory_descriptor(),
+        # Templates install after the directory in the real bootstrap, so
+        # the default LLM must wait for the llm bundle instead of failing.
+        agent_plugin_template_descriptor("llm"),
+        agent_plugin_template_descriptor("tools"),
+        agent_plugin_template_descriptor("name"),
+        agent_loop_template_descriptor(),
+    ]:
+        manager.install_descriptor(descriptor)
+    manager.create_instance(
+        "toml-config-plugin-factory",
+        "langharness_config.plugins.toml",
+        ROOT_SCOPE_ID,
+        properties={"plugin.config.path": str(tmp_path / "langharness.toml")},
+    )
+    manager.create_instance(
+        "configs-plugin-factory",
+        "langharness_config.plugins.configs",
+        ROOT_SCOPE_ID,
+    )
+    manager.create_instance(
+        "agent-registry-plugin-factory",
+        "langharness_core.plugins.agents.registry",
+        SERVER_SCOPE_ID,
+        properties=agent_registry_properties(str(tmp_path)),
+    )
+    manager.create_instance(
+        "agent-directory-plugin-factory",
+        "langharness_core.plugins.agents.directory",
+        SERVER_SCOPE_ID,
+    )
     return manager
 
 

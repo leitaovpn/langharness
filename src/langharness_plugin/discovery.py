@@ -9,6 +9,12 @@ from typing import Any, cast
 
 from langharness_plugin.contracts import SPEC_TOOL_EXPORT_TARGET
 from langharness_plugin.package import PluginPackage
+from langharness_plugin.registry import (
+    PLUGIN_METADATA_ATTR,
+    PluginDescriptor,
+    PluginMetadata,
+    validate_descriptor,
+)
 
 ENTRY_POINT_GROUP = "langharness.plugins"
 VALID_TARGETS = {"root", "ui", "server", "agent", "agent_instance"}
@@ -33,6 +39,67 @@ class DiscoveryResult:
 
 def _installed_entry_points() -> Iterable[EntryPoint]:
     return entry_points(group=ENTRY_POINT_GROUP)
+
+
+def descriptor_discovery(
+    loader: Callable[[], Iterable[Any]],
+) -> tuple[dict[tuple[str, str], PluginDescriptor], tuple[str, ...]]:
+    """Scan entry points for plugin classes and build static descriptors.
+
+    Returns a (module, factory)-keyed map plus per-problem warnings. A bad
+    entry point never blocks the rest.
+    """
+    warnings: list[str] = []
+    descriptors: dict[tuple[str, str], PluginDescriptor] = {}
+    for entry_point in loader():
+        try:
+            loaded = entry_point.load()
+            cls = (
+                loaded
+                if isinstance(loaded, type)
+                else loaded()
+                if callable(loaded)
+                else None
+            )
+            if not isinstance(cls, type):
+                warnings.append(
+                    f"{entry_point.name!r}: entry point must be a class or a "
+                    f"callable returning a class, got {type(loaded).__name__}"
+                )
+                continue
+            metadata = getattr(cls, PLUGIN_METADATA_ATTR, None)
+            if not isinstance(metadata, PluginMetadata):
+                warnings.append(
+                    f"{entry_point.name!r}: class is missing @plugin_metadata"
+                )
+                continue
+            if metadata.module is not None and metadata.module != cls.__module__:
+                warnings.append(
+                    f"{entry_point.name!r}: metadata module "
+                    f"{metadata.module!r} does not match {cls.__module__!r}"
+                )
+                continue
+            descriptor = PluginDescriptor(
+                name=metadata.name,
+                version=metadata.version,
+                module=cls.__module__,
+                factory=metadata.factory,
+                specification=metadata.specification,
+                description=metadata.description,
+                swap_policy=metadata.swap_policy,
+            )
+            validate_descriptor(descriptor)
+            key = (descriptor.module, descriptor.factory)
+            if key in descriptors:
+                warnings.append(
+                    f"{entry_point.name!r}: duplicate (module, factory) {key}; "
+                    "keeping the first entry point"
+                )
+                continue
+            descriptors[key] = descriptor
+        except Exception as exc:
+            warnings.append(f"{entry_point.name!r}: {exc}")
+    return descriptors, tuple(warnings)
 
 
 class PluginDiscovery:
@@ -87,6 +154,7 @@ class PluginDiscovery:
                 raise PluginDiscoveryError(
                     f"Invalid contribution target: {contribution.target!r}"
                 )
+            validate_descriptor(contribution.descriptor)
             if (
                 contribution.tool_exports
                 and contribution.descriptor.specification != SPEC_TOOL_EXPORT_TARGET
@@ -98,21 +166,7 @@ class PluginDiscovery:
     @staticmethod
     def _validate_catalog(packages: list[PluginPackage]) -> None:
         package_ids: set[str] = set()
-        descriptor_names: set[str] = set()
-        descriptor_instances: set[str] = set()
         for package in packages:
             if package.id in package_ids:
                 raise PluginDiscoveryError(f"Duplicate plugin package: {package.id!r}")
             package_ids.add(package.id)
-            for contribution in package.contributions:
-                descriptor = contribution.descriptor
-                if descriptor.name in descriptor_names:
-                    raise PluginDiscoveryError(
-                        f"Duplicate plugin descriptor: {descriptor.name!r}"
-                    )
-                if descriptor.instance in descriptor_instances:
-                    raise PluginDiscoveryError(
-                        f"Duplicate plugin instance: {descriptor.instance!r}"
-                    )
-                descriptor_names.add(descriptor.name)
-                descriptor_instances.add(descriptor.instance)

@@ -26,14 +26,22 @@ def test_create_app_uses_plugin_manager_once(
 
     def fake_manager(registry):
         manager.start = lambda: None
-        manager.install_plugin = lambda descriptor: None
+        manager.install_descriptor = lambda descriptor, **kwargs: None
+        manager.ensure_instance = (
+            lambda factory, module, scope, *, properties, enabled: None
+        )
+        manager.bind_state = lambda store, history: None
+        manager.discover = lambda: None
         return manager
 
     monkeypatch.setattr(server_module, "PluginManager", fake_manager)
+    monkeypatch.setattr(server_module, "PluginRegistry", lambda: SimpleNamespace())
     monkeypatch.setattr(
         server_module,
-        "PluginRegistry",
-        lambda descriptors: SimpleNamespace(list=lambda: descriptors),
+        "RuntimeMutationCoordinator",
+        lambda manager, discovery: SimpleNamespace(
+            rescan=lambda: None, restore=lambda: None
+        ),
     )
 
     app = server_module.create_app()

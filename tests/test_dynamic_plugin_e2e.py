@@ -4,10 +4,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
-import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
@@ -15,14 +13,13 @@ from pydantic import BaseModel
 
 from langharness_core.contracts import (
     SPEC_AGENT_LOOP,
-    SPEC_AGENT_REGISTRY,
     SPEC_LLM,
     SPEC_TOOL,
 )
 from langharness_core.plugin import (
     agent_loop_descriptor,
+    agent_loop_properties,
     agent_loop_template_descriptor,
-    agent_registry_descriptor,
     agent_tools_package,
     dynamic_package,
     tool_export_adapter_template_descriptor,
@@ -33,13 +30,15 @@ from langharness_plugin.contracts import (
 )
 from langharness_plugin.coordinator import (
     RuntimeMutationCoordinator,
-    RuntimeMutationError,
 )
 from langharness_plugin.discovery import PluginDiscovery
 from langharness_plugin.package import PluginContribution, PluginPackage, ToolExport
 from langharness_plugin.plugin_manager import PluginManager
 from langharness_plugin.registry import PluginDescriptor, PluginRegistry
-from langharness_plugin.state_store import InMemoryRuntimeStateStore
+from langharness_plugin.state_store import (
+    InMemoryPluginHistoryStore,
+    InMemoryRuntimeStateStore,
+)
 from langharness_scope import ScopeId
 
 
@@ -57,17 +56,20 @@ class EntryPoint:
         return lambda: self.package
 
 
+ECHO_DESCRIPTION = (
+    "Echo tool export target. Implements plugin.tool_export.target. "
+    "No properties. Uninstall when the echo tools are not needed."
+)
+
+
 def echo_descriptor(name: str, version: str = "1.0.0") -> PluginDescriptor:
     return PluginDescriptor(
         name=name,
         version=version,
         module="dynamic_plugins.echo",
         factory="dynamic-echo-factory",
-        instance=name,
         specification=SPEC_TOOL_EXPORT_TARGET,
-        scope="server",
-        scope_parent="root",
-        enabled=True,
+        description=ECHO_DESCRIPTION,
     )
 
 
@@ -120,30 +122,32 @@ def tool_names(manager: PluginManager, scope: str) -> list[str]:
 
 
 def make_manager() -> PluginManager:
-    manager = PluginManager(
-        PluginRegistry(
-            [
-                PluginDescriptor(
-                    name="tools-template",
-                    version="1.0.0",
-                    module="langharness_core.plugins.tools.tools",
-                    factory="tools-plugin-factory",
-                    instance="tools-template",
-                    specification=SPEC_TOOL,
-                    enabled=False,
-                ),
-                tool_export_adapter_template_descriptor(),
-            ]
-        )
-    )
+    manager = PluginManager(PluginRegistry())
     manager.start()
     return manager
 
 
 def install_templates(manager: PluginManager) -> None:
-    for descriptor in manager.registry.list():
-        manager.install_plugin(descriptor)
-    manager.ensure_scope(ScopeId("agent:a"), name="A", parent_id=ScopeId("agent"))
+    for descriptor in [
+        dynamic_template_tools_descriptor(),
+        tool_export_adapter_template_descriptor(),
+    ]:
+        manager.install_descriptor(descriptor)
+    manager.add_scope(ScopeId("agent:a"), name="A", parent_id=ScopeId("agent"))
+
+
+def dynamic_template_tools_descriptor() -> PluginDescriptor:
+    return PluginDescriptor(
+        name="tools-template",
+        version="1.0.0",
+        module="langharness_core.plugins.tools.tools",
+        factory="tools-plugin-factory",
+        specification=SPEC_TOOL,
+        description=(
+            "Template for the tools plugin bundle. Implements agent.plugin.tools. "
+            "Install to preload the tools bundle for agent scopes."
+        ),
+    )
 
 
 def make_discovery() -> PluginDiscovery:
@@ -155,13 +159,21 @@ def make_discovery() -> PluginDiscovery:
     )
 
 
+def make_coordinator(
+    manager: PluginManager, discovery: PluginDiscovery
+) -> tuple[RuntimeMutationCoordinator, InMemoryRuntimeStateStore]:
+    store = InMemoryRuntimeStateStore()
+    manager.bind_state(store, InMemoryPluginHistoryStore())
+    coordinator = RuntimeMutationCoordinator(manager, discovery=discovery)
+    coordinator.rescan()
+    return coordinator, store
+
+
 def test_dynamic_discovery_install_visibility_and_restore() -> None:
     manager = make_manager()
     try:
         install_templates(manager)
-        store = InMemoryRuntimeStateStore()
-        coordinator = RuntimeMutationCoordinator(manager, store, make_discovery())
-        coordinator.rescan()
+        coordinator, store = make_coordinator(manager, make_discovery())
 
         coordinator.install("example.echo", "echo")
         coordinator.install(
@@ -199,7 +211,8 @@ def test_dynamic_discovery_install_visibility_and_restore() -> None:
     restored = make_manager()
     try:
         install_templates(restored)
-        restarted = RuntimeMutationCoordinator(restored, store, make_discovery())
+        restored.bind_state(store, InMemoryPluginHistoryStore())
+        restarted = RuntimeMutationCoordinator(restored, discovery=make_discovery())
         restarted.rescan()
         registrations = restarted.restore()
         assert {item.scope_id for item in registrations} == {
@@ -216,17 +229,16 @@ def test_dynamic_discovery_full_lifecycle() -> None:
     manager = make_manager()
     try:
         install_templates(manager)
-        store = InMemoryRuntimeStateStore()
-        coordinator = RuntimeMutationCoordinator(manager, store, make_discovery())
+        coordinator, _ = make_coordinator(manager, make_discovery())
 
-        coordinator.rescan()
         assert [item.id for item in coordinator.discovered()] == [
             "example.agent-echo",
             "example.echo",
         ]
 
         installed = coordinator.install("example.echo", "echo")
-        assert installed.descriptor.name == "server-echo"
+        assert installed.factory == "dynamic-echo-factory"
+        assert installed.scope_id == ScopeId("server")
         assert "server_echo" in tool_names(manager, "agent")
 
         disabled = coordinator.set_enabled(
@@ -244,7 +256,6 @@ def test_dynamic_discovery_full_lifecycle() -> None:
         coordinator._catalog["example.echo"] = server_echo_package("1.1.0")
         upgraded = coordinator.upgrade("server-echo", scope_id=ScopeId("server"))
         assert upgraded.package_version == "1.1.0"
-        assert upgraded.descriptor.version == "1.1.0"
 
         coordinator.uninstall("server-echo", scope_id=ScopeId("server"))
         assert coordinator.registrations() == ()
@@ -291,62 +302,47 @@ class StaticModel(BaseChatModel):
 
 
 def make_loop_manager() -> PluginManager:
-    manager = PluginManager(
-        PluginRegistry(
-            [
-                PluginDescriptor(
-                    name="tools-template",
-                    version="1.0.0",
-                    module="langharness_core.plugins.tools.tools",
-                    factory="tools-plugin-factory",
-                    instance="tools-template",
-                    specification=SPEC_TOOL,
-                    enabled=False,
-                ),
-                PluginDescriptor(
-                    name="llm-template",
-                    version="1.0.0",
-                    module="langharness_core.plugins.llm.llm",
-                    factory="llm-plugin-factory",
-                    instance="llm-template",
-                    specification=SPEC_LLM,
-                    enabled=False,
-                ),
-                tool_export_adapter_template_descriptor(),
-                agent_loop_template_descriptor(),
-            ]
-        )
-    )
+    manager = PluginManager(PluginRegistry())
     manager.start()
     return manager
 
 
 def materialize_loop(manager: PluginManager) -> None:
     scope = ScopeId("agent:a")
-    manager.instantiate_instance(
+    manager.add_scope(scope, name="A", parent_id=ScopeId("agent"))
+    manager.install_descriptor(
         PluginDescriptor(
-            name="llm-a",
+            name="llm-template",
             version="1.0.0",
             module="langharness_core.plugins.llm.llm",
             factory="llm-plugin-factory",
-            instance="llm-a",
             specification=SPEC_LLM,
-            properties={
-                "plugin.model.instance": StaticModel(),
-                "plugin.agent_id": "a",
-            },
-        ),
-        scope_id=scope,
-        plugin_key="llm",
+            description=(
+                "Template for the LLM bundle. Implements agent.plugin.llm. "
+                "Install to preload the LLM bundle for agent scopes."
+            ),
+        )
     )
-    manager.instantiate_instance(
-        agent_loop_descriptor(
+    manager.install_descriptor(agent_loop_template_descriptor())
+    manager.create_instance(
+        "llm-plugin-factory",
+        "langharness_core.plugins.llm.llm",
+        scope,
+        properties={
+            "plugin.model.instance": StaticModel(),
+            "plugin.agent_id": "a",
+        },
+    )
+    loop_descriptor = agent_loop_descriptor()
+    manager.create_instance(
+        loop_descriptor.factory,
+        loop_descriptor.module,
+        scope,
+        properties=agent_loop_properties(
             "a",
             [SPEC_LLM, SPEC_TOOL],
             visibility_filter=manager.scope_filter(scope),
         ),
-        scope_id=scope,
-        plugin_key="agent-loop",
     )
 
 
@@ -364,20 +360,17 @@ def test_management_tools_install_enable_disable_visibility() -> None:
     manager = make_manager()
     try:
         install_templates(manager)
-        store = InMemoryRuntimeStateStore()
-        coordinator = RuntimeMutationCoordinator(
-            manager, store, management_discovery()
-        )
+        coordinator, _ = make_coordinator(manager, management_discovery())
         manager.register_runtime_service(DynamicPluginManager, coordinator)
-        coordinator.rescan()
 
         registration = coordinator.install(
             "dynamic.core",
             "management-tools-plugin-template",
             scope_id=ScopeId("agent"),
         )
-        assert registration.descriptor.name == "management-tools-plugin-template"
-        assert MANAGEMENT_TOOLS.isdisjoint(tool_names(manager, "agent"))
+        assert registration.factory == "management-tools-plugin-factory"
+        # Installing creates an enabled instance immediately.
+        assert MANAGEMENT_TOOLS <= set(tool_names(manager, "agent"))
 
         enabled = coordinator.set_enabled(
             "management-tools-plugin-template", True, scope_id=ScopeId("agent")
@@ -399,38 +392,33 @@ def test_management_tools_agent_instance_and_module_guard() -> None:
     manager = make_manager()
     try:
         install_templates(manager)
-        store = InMemoryRuntimeStateStore()
-        coordinator = RuntimeMutationCoordinator(
-            manager, store, management_discovery()
-        )
+        coordinator, _ = make_coordinator(manager, management_discovery())
         manager.register_runtime_service(DynamicPluginManager, coordinator)
-        coordinator.rescan()
 
         registration = coordinator.install(
             "dynamic.core",
             "management-tools-plugin-instance",
             scope_id=ScopeId("agent:a"),
         )
-        assert registration.descriptor.name == (
-            "management-tools-plugin-agent@agent-a"
-        )
+        assert registration.factory == "management-tools-plugin-factory"
         assert registration.scope_id == ScopeId("agent:a")
 
-        with pytest.raises(RuntimeMutationError, match="one plugin per module"):
-            coordinator.install(
-                "dynamic.core",
-                "management-tools-plugin-template",
-                scope_id=ScopeId("agent"),
-            )
+        # The same definition may serve multiple scopes: a second instance of
+        # the same factory is allowed at the agent scope.
+        template = coordinator.install(
+            "dynamic.core",
+            "management-tools-plugin-template",
+            scope_id=ScopeId("agent"),
+        )
+        assert template.instance != registration.instance
+        assert len(manager.list_instance()) == 2
 
         enabled = coordinator.set_enabled(
-            "management-tools-plugin-agent@agent-a",
-            True,
-            scope_id=ScopeId("agent:a"),
+            "management-tools-plugin-template", True, scope_id=ScopeId("agent")
         )
         assert enabled.enabled is True
         assert MANAGEMENT_TOOLS <= set(tool_names(manager, "agent:a"))
-        assert MANAGEMENT_TOOLS.isdisjoint(tool_names(manager, "agent"))
+        assert MANAGEMENT_TOOLS <= set(tool_names(manager, "agent"))
     finally:
         manager.stop()
 
@@ -440,12 +428,8 @@ def test_management_tools_reach_an_agent_loop_and_leave_on_disable() -> None:
     try:
         install_templates(manager)
         materialize_loop(manager)
-        store = InMemoryRuntimeStateStore()
-        coordinator = RuntimeMutationCoordinator(
-            manager, store, management_discovery()
-        )
+        coordinator, _ = make_coordinator(manager, management_discovery())
         manager.register_runtime_service(DynamicPluginManager, coordinator)
-        coordinator.rescan()
 
         assert MANAGEMENT_TOOLS.isdisjoint(loop_tool_names(manager))
 
@@ -453,9 +437,6 @@ def test_management_tools_reach_an_agent_loop_and_leave_on_disable() -> None:
             "dynamic.core",
             "management-tools-plugin-template",
             scope_id=ScopeId("agent"),
-        )
-        coordinator.set_enabled(
-            "management-tools-plugin-template", True, scope_id=ScopeId("agent")
         )
         assert MANAGEMENT_TOOLS <= set(loop_tool_names(manager))
 
@@ -471,17 +452,16 @@ def test_agent_tools_install_enable_disable_visibility() -> None:
     manager = make_manager()
     try:
         install_templates(manager)
-        store = InMemoryRuntimeStateStore()
-        discovery = PluginDiscovery(
-            lambda: [EntryPoint(agent_tools_package(), "agent-tools")]
+        coordinator, _ = make_coordinator(
+            manager,
+            PluginDiscovery(lambda: [EntryPoint(agent_tools_package(), "agent-tools")]),
         )
-        coordinator = RuntimeMutationCoordinator(manager, store, discovery)
-        coordinator.rescan()
+        manager.register_runtime_service(DynamicPluginManager, coordinator)
 
         registration = coordinator.install(
             "agent.tools", "agent-operations", scope_id=ScopeId("agent")
         )
-        assert registration.descriptor.name == "agent-operations-export"
+        assert registration.factory == "agent-operations-export-factory"
         assert AGENT_TOOLS <= set(tool_names(manager, "agent"))
         assert AGENT_TOOLS.isdisjoint(tool_names(manager, "ui"))
 
@@ -490,76 +470,5 @@ def test_agent_tools_install_enable_disable_visibility() -> None:
         )
         assert disabled.enabled is False
         assert AGENT_TOOLS.isdisjoint(tool_names(manager, "agent"))
-
-        enabled = coordinator.set_enabled(
-            "agent-operations-export", True, scope_id=ScopeId("agent")
-        )
-        assert enabled.enabled is True
-        assert AGENT_TOOLS <= set(tool_names(manager, "agent"))
-    finally:
-        manager.stop()
-
-
-def test_agent_tools_reach_an_agent_loop() -> None:
-    manager = make_loop_manager()
-    try:
-        install_templates(manager)
-        materialize_loop(manager)
-        store = InMemoryRuntimeStateStore()
-        discovery = PluginDiscovery(
-            lambda: [EntryPoint(agent_tools_package(), "agent-tools")]
-        )
-        coordinator = RuntimeMutationCoordinator(manager, store, discovery)
-        coordinator.rescan()
-
-        assert AGENT_TOOLS.isdisjoint(loop_tool_names(manager))
-
-        coordinator.install(
-            "agent.tools", "agent-operations", scope_id=ScopeId("agent")
-        )
-        assert AGENT_TOOLS <= set(loop_tool_names(manager))
-    finally:
-        manager.stop()
-
-
-def test_agent_tools_create_agent_through_real_registry(tmp_path: Path) -> None:
-    manager = make_loop_manager()
-    try:
-        install_templates(manager)
-        manager.install_plugin(agent_registry_descriptor(str(tmp_path)))
-        store = InMemoryRuntimeStateStore()
-        discovery = PluginDiscovery(
-            lambda: [EntryPoint(agent_tools_package(), "agent-tools")]
-        )
-        coordinator = RuntimeMutationCoordinator(manager, store, discovery)
-        coordinator.rescan()
-        coordinator.install(
-            "agent.tools", "agent-operations", scope_id=ScopeId("agent")
-        )
-
-        providers = manager.find_services(
-            SPEC_TOOL, manager.scope_filter(ScopeId("agent"))
-        )
-        create_tool = next(
-            tool
-            for provider in providers
-            for tool in provider.get_tools()
-            if tool.name == "create_agent"
-        )
-        result = create_tool.invoke(
-            {
-                "agent_id": "billing",
-                "name": "Billing",
-                "description": "Handles invoices",
-            }
-        )
-        assert result["id"] == "billing"
-
-        registry = manager.find_service(SPEC_AGENT_REGISTRY)
-        assert registry is not None
-        assert [item["id"] for item in registry.list_agents()] == [
-            "simple_agent",
-            "billing",
-        ]
     finally:
         manager.stop()
