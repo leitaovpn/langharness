@@ -1559,3 +1559,38 @@ ps aux | grep "mode.*server"
 - **占位符扫描**:无 TBD/TODO;每个代码步骤附完整代码。
 - **类型一致性**:`ClientRegistry` 的方法名在 Task 1/2/3 一致;`auto_shutdown`/`grace` 参数名在 contracts、runtime、bootstrap、e2e 一致;fixture `faked_uvicorn` 的注入写法已在 Task 3 Step 1 末尾修正说明。
 - **已知遗留**:`test_api_guard.py` 中 `ConnectionClosed*` 的构造参数以 websockets 16 实际签名为准(Step 2 注已说明);coverage 若不足需按报告补测(Task 7 Step 2 注)。
+
+---
+
+## 执行偏差记录(2026-09-20 实施时发现)
+
+1. **命脉路由不再走 RouteProvider 插件(Task 2 部分回退)**:FastAPI 不给
+   WebSocket 路由的依赖注入 `Request` 参数——router 级 auth/rate-limit 依赖
+   在 WS 握手时抛 `TypeError: dep() missing 1 required positional argument`,
+   表现为 HTTP 500。改法:`ServerServerService.server()` 用
+   `app.add_api_websocket_route("/clients/attach", lifeline, dependencies=...)`
+   直接挂载;`AuthProvider` 契约新增 `get_websocket_dependency()`,其依赖取
+   `WebSocket` 参数读 `websocket.headers`,校验失败抛 `HTTPException(401)`
+   (FastAPI 在握手期转成 `websocket.close` → uvicorn 记录 403 拒绝)。
+   路由插件 `plugins/routes/lifecycle.py` 及其 descriptor 已删除。
+2. **APIGuard spawn 用 DEVNULL**:server 子进程若继承 CLI 的 stdout/stderr
+   管道,CLI 退出后 server 按设计还要活宽限期,管道不 EOF,`subprocess.run`
+   的 `communicate()` 被挂住直到 server 退出。server 有自己的日志插件
+   写文件,stdio 重定向到 DEVNULL 无信息损失。
+3. **契约校验要求测试 fake 带返回注解**:`ServerServerProvider`/`AgentServerProvider`
+   的 monkeypatch 假实现若缺 `-> None` 等注解会被 `ContractGuard` 拒收
+   (test_bootstrap、test_server_runtime 均已按此写)。
+4. **test_module_services 适配**:原测试 monkeypatch `uvicorn.run`,重写后
+   `server()` 不再调用它;改为 fake `uvicorn.Config`/`uvicorn.Server`,
+   假 app 换成真 `FastAPI`(新代码调用 `app.add_api_websocket_route`)。
+5. **test_cli_e2e 隔离配置目录**:原 `test_cli_auto_starts_api_server` 与
+   `test_cli_reuses_running_api_server` 用真实 `~/.langharness`,受用户配置
+   影响(启动 10-60 秒方差,超 30s 测试超时)且会向用户真实状态文件写入。
+   改用 `tmp_path` + `--dir`,超时放宽到 60s。
+6. **用户状态文件修复**:全量测试期间,临时存在的 lifecycle 插件被持久化进
+   用户真实 `~/.langharness/runtime_state.sqlite3`;插件删除后 `restore()`
+   在 `install_bundle` 阶段抛 `BundleException`,server 无法启动。已手动
+   清理该快照中的 lifecycle descriptor/instance 记录(备份于
+   /tmp/runtime_state.backup.sqlite3)。**遗留风险**:插件模块消失时
+   `PluginManager.restore()` 会硬崩溃,建议后续加容错(忽略缺失模块并
+   告警),超出本任务范围。
