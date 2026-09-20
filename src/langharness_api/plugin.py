@@ -108,6 +108,17 @@ def api_health_descriptor() -> PluginDescriptor:
     )
 
 
+def api_lifecycle_descriptor() -> PluginDescriptor:
+    return PluginDescriptor(
+        name="api-lifecycle",
+        version="1.0.0",
+        module="langharness_api.plugins.routes.lifecycle",
+        factory="api-lifecycle-route-factory",
+        specification=SPEC_ROUTE,
+        description=ROUTE_DESCRIPTION,
+    )
+
+
 def api_stream_descriptor() -> PluginDescriptor:
     return PluginDescriptor(
         name="api-stream",
@@ -225,6 +236,9 @@ def builtin_package() -> PluginPackage:
             PluginContribution("api-rate-limit", "server", api_rate_limit_descriptor()),
             PluginContribution("api-db", "root", api_db_descriptor()),
             PluginContribution("api-health", "server", api_health_descriptor()),
+            PluginContribution(
+                "api-lifecycle", "server", api_lifecycle_descriptor()
+            ),
             PluginContribution("api-stream", "server", api_stream_descriptor()),
             PluginContribution("api-resume", "server", api_resume_descriptor()),
             PluginContribution("api-plugins", "server", api_plugins_descriptor()),
