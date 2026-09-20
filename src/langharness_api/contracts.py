@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable, Mapping
 from typing import Any, Protocol, runtime_checkable
 
-from fastapi import APIRouter, FastAPI, Request
+from fastapi import APIRouter, FastAPI, Request, WebSocket
 
 from langharness_plugin.validation import service_contract
 
@@ -30,6 +30,8 @@ class RouteProvider(Protocol):
 @runtime_checkable
 class AuthProvider(Protocol):
     def get_auth_dependency(self) -> Callable[[Request], Any]: ...
+
+    def get_websocket_dependency(self) -> Callable[[WebSocket], Any]: ...
 
     def get_plugin_info(self) -> dict[str, str]: ...
 
@@ -63,7 +65,13 @@ class APIServerProvider(Protocol):
 class ServerServerProvider(Protocol):
     def set_agent(self, agent: Any) -> None: ...
 
-    def server(self, host: str, port: int) -> None: ...
+    def server(
+        self,
+        host: str,
+        port: int,
+        auto_shutdown: bool = False,
+        grace: float = 10.0,
+    ) -> None: ...
 
 
 @service_contract(SPEC_UI_SDK)

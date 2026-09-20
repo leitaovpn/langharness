@@ -109,6 +109,19 @@ def parse_options(argv: list[str]) -> tuple[Namespace, list[str]]:
         dest="config_dir",
         default=os.environ.get("LANG_HARNESS_DIR", DEFAULT_CONFIG_DIR),
     )
+    parser.add_argument(
+        "--auto-shutdown",
+        action="store_true",
+        default=False,
+        help="exit the server after its last client detaches",
+    )
+    parser.add_argument(
+        "--auto-shutdown-grace",
+        type=float,
+        default=10.0,
+        metavar="SECONDS",
+        help="grace window before auto-shutdown (default 10)",
+    )
     return parser.parse_known_args(argv)
 
 
@@ -221,6 +234,15 @@ def base_url_for(options: Namespace) -> str:
         else options.server_ip
     )
     return f"http://{host}:{options.server_port}"
+
+
+def _token_from_argv(argv: list[str]) -> str:
+    for index, arg in enumerate(argv):
+        if arg == "--token" and index + 1 < len(argv):
+            return argv[index + 1]
+        if arg.startswith("--token="):
+            return arg.split("=", 1)[1]
+    return "secret"
 
 
 def _assembly_requests(
@@ -355,11 +377,22 @@ def _run(options: Namespace, remainder: list[str]) -> int:
             )
             if server_service is None:
                 raise BootstrapError("Server package did not provide server.server")
-            server_service.server(options.server_ip, options.server_port)
+            server_service.server(
+                options.server_ip,
+                options.server_port,
+                auto_shutdown=options.auto_shutdown,
+                grace=options.auto_shutdown_grace,
+            )
             return 0
 
         if options.mode == "all":
-            APIGuard(base_url, config_dir=options.config_dir).ensure_api_server()
+            guard = APIGuard(
+                base_url,
+                config_dir=options.config_dir,
+                token=_token_from_argv(remainder),
+            )
+            guard.ensure_api_server()
+            guard.attach_client()
 
         ui_service = cast(UIServerProvider | None, manager.get_service(SPEC_UI_SERVER))
         if ui_service is None:

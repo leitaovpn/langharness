@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import uvicorn
+from fastapi import Depends, WebSocket, WebSocketDisconnect
 from pelix.ipopo.decorators import (
     BindField,
     ComponentFactory,
@@ -13,22 +14,46 @@ from pelix.ipopo.decorators import (
     UnbindField,
 )
 
-from langharness_api.contracts import APIServerProvider, ServerServerProvider
+from langharness_api.common.client_registry import ClientRegistry
+from langharness_api.contracts import (
+    APIServerProvider,
+    AuthProvider,
+    ServerServerProvider,
+)
 from langharness_core.contracts import AgentServerProvider
 from langharness_plugin.validation import ContractGuard
+
+
+async def lifeline(websocket: WebSocket) -> None:
+    """Serve one client lifeline: count it until it disconnects."""
+    registry = getattr(websocket.app.state, "client_registry", None)
+    await websocket.accept()
+    if registry is not None:
+        registry.attach(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        if registry is not None:
+            registry.detach(websocket)
 
 
 @ComponentFactory("server-server-factory")
 @Provides(ServerServerProvider)
 @RequiresBest("_api", APIServerProvider, optional=True, immediate_rebind=True)
 @RequiresBest("_agent", AgentServerProvider, optional=True, immediate_rebind=True)
+@RequiresBest("_auth", AuthProvider, optional=True, immediate_rebind=True)
 class ServerServerService:
     def __init__(self) -> None:
         self._api: Any = None
         self._agent: Any = None
+        self._auth: Any = None
         self._guards = {
             "_api": ContractGuard(self, "_api", APIServerProvider),
             "_agent": ContractGuard(self, "_agent", AgentServerProvider),
+            "_auth": ContractGuard(self, "_auth", AuthProvider),
         }
 
     @BindField("_api", if_valid=True)
@@ -40,18 +65,50 @@ class ServerServerService:
         if self._guards[field].admit(service):
             self.set_agent(service)
 
+    @BindField("_auth", if_valid=True)
+    def _on_auth_bind(self, field: str, service: Any, reference: Any) -> None:
+        self._guards[field].admit(service)
+
     @UnbindField("_api")
     @UnbindField("_agent")
+    @UnbindField("_auth")
     def _on_unbind(self, field: str, service: Any, reference: Any) -> None:
         self._guards[field].release(service)
 
     def set_agent(self, agent: Any) -> None:
         self._agent = agent
 
-    def server(self, host: str, port: int) -> None:
+    def server(
+        self,
+        host: str,
+        port: int,
+        auto_shutdown: bool = False,
+        grace: float = 10.0,
+    ) -> None:
         if self._api is None:
             raise RuntimeError("API server service is unavailable")
         app = self._api.build_app()
         app.state.agent = self._agent
-        uvicorn.run(app, host=host, port=port, log_config=None)
-
+        config = uvicorn.Config(
+            app,
+            host=host,
+            port=port,
+            log_config=None,
+            timeout_graceful_shutdown=10,
+        )
+        server = uvicorn.Server(config)
+        registry = ClientRegistry(grace=grace)
+        registry.set_enabled(auto_shutdown)
+        registry.set_shutdown_callback(
+            lambda: setattr(server, "should_exit", True)
+        )
+        app.state.client_registry = registry
+        dependencies = []
+        if self._auth is not None:
+            dependencies.append(
+                Depends(self._auth.get_websocket_dependency())
+            )
+        app.add_api_websocket_route(
+            "/clients/attach", lifeline, dependencies=dependencies
+        )
+        server.run()

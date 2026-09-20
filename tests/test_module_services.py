@@ -84,29 +84,50 @@ def test_ui_server_forwards_unified_settings(monkeypatch: pytest.MonkeyPatch) ->
 def test_server_service_builds_app_and_exposes_agent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from fastapi import FastAPI
+
     import langharness_api.plugins.server.runtime as runtime_module
 
-    app = SimpleNamespace(state=SimpleNamespace())
-    captured = {}
+    app = FastAPI()
+    configs = []
+    ran = []
+
+    class FakeUvicornServer:
+        def __init__(self, config) -> None:
+            self.should_exit = False
+
+        def run(self) -> None:
+            ran.append(1)
+
+    monkeypatch.setattr(
+        runtime_module.uvicorn,
+        "Config",
+        lambda target, **kwargs: configs.append((target, kwargs)),
+    )
+    monkeypatch.setattr(
+        runtime_module.uvicorn,
+        "Server",
+        lambda config: FakeUvicornServer(config),
+    )
+
     service = ServerServerService()
     service._api = SimpleNamespace(build_app=lambda: app)
     agent = object()
     service.set_agent(agent)
-    monkeypatch.setattr(
-        runtime_module.uvicorn,
-        "run",
-        lambda target, **kwargs: captured.update(target=target, **kwargs),
-    )
 
     service.server("0.0.0.0", 9123)
 
     assert app.state.agent is agent
-    assert captured == {
-        "target": app,
+    target, kwargs = configs[0]
+    assert target is app
+    assert kwargs == {
         "host": "0.0.0.0",
         "port": 9123,
         "log_config": None,
+        "timeout_graceful_shutdown": 10,
     }
+    assert app.state.client_registry is not None
+    assert ran == [1]
     service._api = None
     with pytest.raises(RuntimeError, match="unavailable"):
         service.server("127.0.0.1", 1)
