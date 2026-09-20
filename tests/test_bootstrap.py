@@ -307,7 +307,7 @@ def test_run_assembles_real_ui_and_server_managers(
 
 def _guard_spy(
     monkeypatch: pytest.MonkeyPatch, mode: str, tmp_path
-) -> list[tuple[str, dict]]:
+) -> list[tuple[str, dict, list[str]]]:
     """Run one UI process mode with the guard and the UI itself captured.
 
     Each mode gets its own `_run` call: a second call re-executes the plugin
@@ -315,11 +315,15 @@ def _guard_spy(
     """
     from langharness_cli.plugins.server import UIServerService
 
-    guards: list[tuple[str, dict]] = []
+    guards: list[tuple[str, dict, list[str]]] = []
 
     def guard(base_url: str, **kwargs) -> SimpleNamespace:
-        guards.append((base_url, kwargs))
-        return SimpleNamespace(ensure_api_server=lambda: None)
+        calls: list[str] = []
+        guards.append((base_url, kwargs, calls))
+        return SimpleNamespace(
+            ensure_api_server=lambda: calls.append("ensure"),
+            attach_client=lambda: calls.append("attach"),
+        )
 
     def run(self, config) -> int:
         return 0
@@ -345,9 +349,22 @@ def test_run_does_not_guard_api_server_in_ui_mode(
 def test_run_guards_api_server_in_all_mode(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
-    assert _guard_spy(monkeypatch, "all", tmp_path) == [
-        ("http://127.0.0.2:19000", {"config_dir": str(tmp_path)})
-    ]
+    base_url, kwargs, calls = _guard_spy(monkeypatch, "all", tmp_path)[0]
+    assert base_url == "http://127.0.0.2:19000"
+    assert kwargs == {"config_dir": str(tmp_path), "token": "secret"}
+    assert calls == ["ensure", "attach"]
+
+
+def test_token_from_argv_defaults_to_secret() -> None:
+    assert bootstrap_module._token_from_argv([]) == "secret"
+
+
+def test_token_from_argv_parses_flag_forms() -> None:
+    assert bootstrap_module._token_from_argv(["--token", "abc"]) == "abc"
+    assert bootstrap_module._token_from_argv(["--token=xyz"]) == "xyz"
+    assert (
+        bootstrap_module._token_from_argv(["interactive", "--token", "q"]) == "q"
+    )
 
 
 def test_main_restores_environment_and_reports_bootstrap_errors(

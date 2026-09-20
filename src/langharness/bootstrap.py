@@ -236,6 +236,15 @@ def base_url_for(options: Namespace) -> str:
     return f"http://{host}:{options.server_port}"
 
 
+def _token_from_argv(argv: list[str]) -> str:
+    for index, arg in enumerate(argv):
+        if arg == "--token" and index + 1 < len(argv):
+            return argv[index + 1]
+        if arg.startswith("--token="):
+            return arg.split("=", 1)[1]
+    return "secret"
+
+
 def _assembly_requests(
     packages: Iterable[PluginPackage],
     *,
@@ -377,7 +386,13 @@ def _run(options: Namespace, remainder: list[str]) -> int:
             return 0
 
         if options.mode == "all":
-            APIGuard(base_url, config_dir=options.config_dir).ensure_api_server()
+            guard = APIGuard(
+                base_url,
+                config_dir=options.config_dir,
+                token=_token_from_argv(remainder),
+            )
+            guard.ensure_api_server()
+            guard.attach_client()
 
         ui_service = cast(UIServerProvider | None, manager.get_service(SPEC_UI_SERVER))
         if ui_service is None:
