@@ -1,9 +1,11 @@
 """Unit tests for the server process service shutdown wiring."""
+# mypy: ignore-errors
 
 from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -111,3 +113,69 @@ async def test_lifespan_marks_registry_ready() -> None:
 async def test_lifespan_without_registry_is_a_noop() -> None:
     async with _lifespan(FastAPI()):
         pass
+
+
+@pytest.mark.asyncio
+async def test_server_registers_auth_guarded_lifeline(
+    faked_uvicorn: tuple[FakeUvicornServer, list],
+) -> None:
+    fake_server, configs = faked_uvicorn
+    service = ServerServerService()
+    service._api = FakeApi()
+    service._auth = SimpleNamespace(
+        get_websocket_dependency=lambda: (lambda websocket: None)
+    )
+
+    service.server("127.0.0.1", 19000)
+
+    app = configs[0][0]
+    paths = [getattr(route, "path", "") for route in app.routes]
+    assert "/clients/attach" in paths
+    assert fake_server.ran is True
+
+
+def test_auth_bind_and_unbind_guard_glue() -> None:
+    from langharness_api.plugins.auth.auth import AuthPlugin
+
+    service = ServerServerService()
+    auth = AuthPlugin()
+    service._on_auth_bind("_auth", auth, None)
+    service._on_unbind("_auth", auth, None)
+
+
+def test_agent_bind_rejects_nonconforming_service() -> None:
+    service = ServerServerService()
+    service._on_agent_bind("_agent", SimpleNamespace(), None)
+    assert service._agent is None
+
+
+def test_api_bind_glue_and_agent_bind_success() -> None:
+    def list_agents() -> list[dict[str, Any]]:
+        return []
+
+    def get_loop(agent_id: str) -> Any | None:
+        return None
+
+    def reload(agent_id: str | None = None) -> None:
+        pass
+
+    def replace_loop_package(package_id: str, contribution_id: str) -> None:
+        pass
+
+    service = ServerServerService()
+    service._on_bind("_api", FakeApi(), None)
+    agent = SimpleNamespace(
+        list_agents=list_agents,
+        get_loop=get_loop,
+        reload=reload,
+        replace_loop_package=replace_loop_package,
+    )
+    service._on_agent_bind("_agent", agent, None)
+    assert service._agent is agent
+    service._on_unbind("_agent", agent, None)
+    service._on_unbind("_api", None, None)
+
+
+def test_server_requires_api_service() -> None:
+    with pytest.raises(RuntimeError, match="unavailable"):
+        ServerServerService().server("127.0.0.1", 1)

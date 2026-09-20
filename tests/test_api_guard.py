@@ -50,7 +50,7 @@ def test_api_guard_starts_server_with_auto_shutdown(
     monkeypatch.setattr(
         api_guard_module.subprocess,
         "Popen",
-        lambda command: commands.append(command) or process,
+        lambda command, **kwargs: commands.append(command) or process,
     )
     monkeypatch.setattr(api_guard_module.time, "sleep", lambda _: None)
     monkeypatch.setattr(api_guard_module.time, "monotonic", lambda: 0.0)
@@ -95,7 +95,7 @@ def test_api_guard_frozen_spawns_executable(
     monkeypatch.setattr(
         api_guard_module.subprocess,
         "Popen",
-        lambda command: commands.append(command) or FakeProcess(),
+        lambda command, **kwargs: commands.append(command) or FakeProcess(),
     )
     monkeypatch.setattr(api_guard_module.sys, "frozen", True, raising=False)
     monkeypatch.setattr(api_guard_module.time, "sleep", lambda _: None)
@@ -129,7 +129,7 @@ def test_api_guard_waits_out_stale_lock(
     monkeypatch.setattr(
         api_guard_module.subprocess,
         "Popen",
-        lambda command: type(
+        lambda command, **kwargs: type(
             "P",
             (),
             {
@@ -154,7 +154,7 @@ def test_api_guard_raises_when_lock_held(
     lock = tmp_path / "api_server.lock"
     lock.write_text(str(os.getpid()))
     monkeypatch.setattr(api_guard_module.time, "sleep", lambda _: None)
-    ticks = iter([0.0, 1.0])
+    ticks = iter([0.0, 0.0, 1.0])
     monkeypatch.setattr(api_guard_module.time, "monotonic", lambda: next(ticks))
 
     guard = APIGuard(config_dir=str(tmp_path), startup_timeout=0.1)
@@ -178,7 +178,7 @@ def test_api_guard_terminates_on_startup_timeout(
 
     process = FakeProcess()
     monkeypatch.setattr(
-        api_guard_module.subprocess, "Popen", lambda command: process
+        api_guard_module.subprocess, "Popen", lambda command, **kwargs: process
     )
     monkeypatch.setattr(api_guard_module.time, "sleep", lambda _: None)
     ticks = iter([0.0, 0.0, 100.0])
@@ -194,6 +194,10 @@ def test_api_guard_terminates_on_startup_timeout(
 def test_api_guard_attach_and_detach_lifeline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        api_guard_module.signal, "signal", lambda signum, handler: None
+    )
+
     class FakeWS:
         def __init__(self) -> None:
             self.closed = False
@@ -244,6 +248,10 @@ def test_api_guard_attach_failure_warns(monkeypatch: pytest.MonkeyPatch) -> None
 def test_api_guard_drain_handles_closed_lifeline(
     monkeypatch: pytest.MonkeyPatch, exception
 ) -> None:
+    monkeypatch.setattr(
+        api_guard_module.signal, "signal", lambda signum, handler: None
+    )
+
     class FakeWS:
         def close(self) -> None:
             pass
@@ -290,3 +298,244 @@ def test_api_guard_signal_handler_detaches_and_reinvokes(
     handler = handlers[signal.SIGINT]
     handler(signal.SIGINT, None)
     assert sent == [(os.getpid(), signal.SIGINT)]
+
+
+def test_api_guard_is_running_returns_false_on_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def boom(*a, **k):
+        raise api_guard_module.httpx.ConnectError("refused")
+
+    monkeypatch.setattr(api_guard_module.httpx, "get", boom)
+    assert APIGuard().is_running() is False
+
+
+def test_api_guard_skips_spawn_when_already_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spawns = []
+    monkeypatch.setattr(
+        api_guard_module.subprocess,
+        "Popen",
+        lambda command, **kwargs: spawns.append(command),
+    )
+    guard = APIGuard(config_dir="/tmp/nonexistent-dir")
+    guard.is_running = lambda: True  # type: ignore[method-assign]
+    guard.ensure_api_server()
+    assert spawns == []
+
+
+def test_api_guard_recheck_inside_lock_skips_spawn(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    spawns = []
+    monkeypatch.setattr(
+        api_guard_module.subprocess,
+        "Popen",
+        lambda command, **kwargs: spawns.append(command),
+    )
+    monkeypatch.setattr(api_guard_module.time, "monotonic", lambda: 0.0)
+    guard = APIGuard(config_dir=str(tmp_path))
+    states = [False, True]
+    guard.is_running = lambda: states.pop(0)  # type: ignore[method-assign]
+    guard.ensure_api_server()
+    assert spawns == []
+    assert not (tmp_path / "api_server.lock").exists()
+
+
+def test_api_guard_spawns_without_config_dir(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeProcess:
+        def terminate(self) -> None:
+            pass
+
+        def poll(self) -> None:
+            return None
+
+    commands = []
+    monkeypatch.setattr(
+        api_guard_module.subprocess,
+        "Popen",
+        lambda command, **kwargs: commands.append(command) or FakeProcess(),
+    )
+    monkeypatch.setattr(api_guard_module.time, "sleep", lambda _: None)
+    monkeypatch.setattr(api_guard_module.time, "monotonic", lambda: 0.0)
+
+    guard = APIGuard()
+    states = [False, False, True]
+    guard.is_running = lambda: states.pop(0)  # type: ignore[method-assign]
+    guard.ensure_api_server()
+    assert "--config-dir" not in commands[0]
+
+
+def test_api_guard_poll_loop_sleeps_between_checks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    class FakeProcess:
+        def terminate(self) -> None:
+            pass
+
+        def poll(self) -> None:
+            return None
+
+    sleeps = []
+    monkeypatch.setattr(
+        api_guard_module.subprocess,
+        "Popen",
+        lambda command, **kwargs: FakeProcess(),
+    )
+    monkeypatch.setattr(api_guard_module.time, "sleep", sleeps.append)
+    ticks = iter([0.0, 0.0, 5.0, 5.0])
+    monkeypatch.setattr(api_guard_module.time, "monotonic", lambda: next(ticks))
+
+    guard = APIGuard(config_dir=str(tmp_path))
+    states = [False, False, False, True]
+    guard.is_running = lambda: states.pop(0)  # type: ignore[method-assign]
+    guard.ensure_api_server()
+    assert sleeps == [0.1]
+
+
+def test_api_guard_attach_twice_opens_one_lifeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        api_guard_module.signal, "signal", lambda signum, handler: None
+    )
+
+    class BlockingWS:
+        def close(self) -> None:
+            pass
+
+        def __iter__(self):
+            return iter(())
+
+    connected = []
+    monkeypatch.setattr(
+        api_guard_module,
+        "connect",
+        lambda url, **kwargs: connected.append(url) or BlockingWS(),
+    )
+    monkeypatch.setattr(api_guard_module.atexit, "register", lambda fn: None)
+
+    guard = APIGuard()
+    guard.attach_client()
+    guard.attach_client()
+    assert connected == ["ws://127.0.0.1:11534/clients/attach"]
+
+
+def test_api_guard_detach_swallows_close_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        api_guard_module.signal, "signal", lambda signum, handler: None
+    )
+
+    class BadWS:
+        def close(self) -> None:
+            raise OSError("broken pipe")
+
+        def __iter__(self):
+            return iter(())
+
+    monkeypatch.setattr(
+        api_guard_module, "connect", lambda url, **kwargs: BadWS()
+    )
+    guard = APIGuard()
+    guard.attach_client()
+    guard.detach_client()  # must not raise
+
+
+def test_api_guard_drain_consumes_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        api_guard_module.signal, "signal", lambda signum, handler: None
+    )
+
+    class YieldingWS:
+        def close(self) -> None:
+            pass
+
+        def __iter__(self):
+            yield "msg"
+            raise ConnectionClosedOK(None, None)
+
+    monkeypatch.setattr(
+        api_guard_module, "connect", lambda url, **kwargs: YieldingWS()
+    )
+    guard = APIGuard()
+    guard.attach_client()
+    assert guard._ws is not None
+
+
+def test_api_guard_signal_install_swallows_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def bad_signal(signum, handler):
+        raise ValueError("not main thread")
+
+    monkeypatch.setattr(api_guard_module.signal, "signal", bad_signal)
+    monkeypatch.setattr(api_guard_module.atexit, "register", lambda fn: None)
+    monkeypatch.setattr(
+        api_guard_module,
+        "connect",
+        lambda url, **kwargs: type(
+            "WS",
+            (),
+            {
+                "close": lambda self: None,
+                "__iter__": lambda self: iter(()),
+            },
+        )(),
+    )
+    guard = APIGuard()
+    guard.attach_client()  # must not raise
+
+
+def test_api_guard_lock_is_stale_with_garbage(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    lock = tmp_path / "api_server.lock"
+    lock.write_text("not-a-pid")
+    monkeypatch.setattr(
+        api_guard_module.subprocess,
+        "Popen",
+        lambda command, **kwargs: type(
+            "P",
+            (),
+            {
+                "terminate": lambda self: None,
+                "poll": lambda self: None,
+            },
+        )(),
+    )
+    monkeypatch.setattr(api_guard_module.time, "sleep", lambda _: None)
+    monkeypatch.setattr(api_guard_module.time, "monotonic", lambda: 0.0)
+
+    guard = APIGuard(config_dir=str(tmp_path))
+    states = [False, False, True]
+    guard.is_running = lambda: states.pop(0)  # type: ignore[method-assign]
+    guard.ensure_api_server()
+    assert not lock.exists()
+
+
+def test_install_exit_hooks_is_idempotent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registered = []
+    monkeypatch.setattr(api_guard_module.atexit, "register", registered.append)
+    monkeypatch.setattr(
+        api_guard_module.signal, "signal", lambda signum, handler: None
+    )
+    guard = APIGuard()
+    guard._install_exit_hooks()
+    guard._install_exit_hooks()
+    assert registered == [guard.detach_client]
+
+
+def test_release_startup_lock_unlinks(tmp_path) -> None:
+    lock = tmp_path / "api_server.lock"
+    lock.write_text("1")
+    APIGuard()._release_startup_lock(lock)
+    assert not lock.exists()

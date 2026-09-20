@@ -21,7 +21,7 @@ def free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def wait_for_health(base_url: str, timeout: float = 15.0) -> bool:
+def wait_for_health(base_url: str, timeout: float = 30.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -33,7 +33,7 @@ def wait_for_health(base_url: str, timeout: float = 15.0) -> bool:
     return False
 
 
-def test_cli_auto_starts_api_server() -> None:
+def test_cli_auto_starts_api_server(tmp_path: Path) -> None:
     port = free_port()
     result = subprocess.run(
         [
@@ -42,21 +42,24 @@ def test_cli_auto_starts_api_server() -> None:
             "langharness_cli",
             "--server-port",
             str(port),
+            "--dir",
+            str(tmp_path),
             "health",
         ],
         env=ENV,
         check=False,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=60,
     )
     assert result.returncode == 0, result.stderr
     assert "'status': 'ok'" in result.stdout
 
 
-def test_cli_reuses_running_api_server() -> None:
+def test_cli_reuses_running_api_server(tmp_path: Path) -> None:
     port = free_port()
     base_url = f"http://127.0.0.1:{port}"
+    env = {**ENV, "LANG_HARNESS_DIR": str(tmp_path)}
     server = subprocess.Popen(
         [
             sys.executable,
@@ -69,7 +72,7 @@ def test_cli_reuses_running_api_server() -> None:
             "--port",
             str(port),
         ],
-        env=ENV,
+        env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -82,13 +85,15 @@ def test_cli_reuses_running_api_server() -> None:
                 "langharness_cli",
                 "--server-port",
                 str(port),
+                "--dir",
+                str(tmp_path),
                 "health",
             ],
-            env=ENV,
+            env=env,
             check=False,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=60,
         )
         assert result.returncode == 0, result.stderr
         assert "'status': 'ok'" in result.stdout

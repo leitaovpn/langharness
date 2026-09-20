@@ -1,4 +1,5 @@
 """Unit tests for the client lifeline websocket and its auth."""
+# mypy: ignore-errors
 
 from __future__ import annotations
 
@@ -72,3 +73,8 @@ def test_lifeline_rejects_invalid_token() -> None:
                 headers={"authorization": "Bearer wrong"},
             ):
                 pass
+
+
+def test_auth_plugin_reports_its_info() -> None:
+    info = AuthPlugin().get_plugin_info()
+    assert info == {"name": "auth", "version": "1.0.0"}

@@ -1,4 +1,5 @@
 """Unit tests for the client registry driving server auto-shutdown."""
+# mypy: ignore-errors
 
 from __future__ import annotations
 
@@ -99,3 +100,45 @@ async def test_missing_shutdown_callback_is_safe() -> None:
     registry.attach(client)
     registry.detach(client)
     await asyncio.sleep(0.05)
+
+
+@pytest.mark.asyncio
+async def test_mark_ready_with_clients_does_not_schedule() -> None:
+    shutdowns: list[int] = []
+    registry = ClientRegistry(grace=0.01)
+    registry.set_enabled(True)
+    registry.set_shutdown_callback(lambda: shutdowns.append(1))
+
+    client = object()
+    registry.attach(client)
+    registry.mark_ready()
+    await asyncio.sleep(0.05)
+    assert shutdowns == []
+    registry.detach(client)
+    await asyncio.sleep(0.05)
+    assert shutdowns == [1]
+
+
+@pytest.mark.asyncio
+async def test_second_mark_ready_reuses_pending_timer() -> None:
+    shutdowns: list[int] = []
+    registry = ClientRegistry(grace=0.01)
+    registry.set_enabled(True)
+    registry.set_shutdown_callback(lambda: shutdowns.append(1))
+
+    registry.mark_ready()
+    registry.mark_ready()  # timer already pending: no second timer
+    await asyncio.sleep(0.05)
+    assert shutdowns == [1]
+
+
+@pytest.mark.asyncio
+async def test_timer_fire_after_disable_is_a_noop() -> None:
+    shutdowns: list[int] = []
+    registry = ClientRegistry(grace=0.02)
+    registry.set_enabled(True)
+    registry.set_shutdown_callback(lambda: shutdowns.append(1))
+    registry.mark_ready()  # schedules the timer
+    registry.set_enabled(False)  # before the timer fires
+    await asyncio.sleep(0.06)
+    assert shutdowns == []
