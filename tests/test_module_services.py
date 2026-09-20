@@ -84,9 +84,11 @@ def test_ui_server_forwards_unified_settings(monkeypatch: pytest.MonkeyPatch) ->
 def test_server_service_builds_app_and_exposes_agent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from fastapi import FastAPI
+
     import langharness_api.plugins.server.runtime as runtime_module
 
-    app = SimpleNamespace(state=SimpleNamespace())
+    app = FastAPI()
     configs = []
     ran = []
 

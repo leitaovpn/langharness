@@ -78,7 +78,11 @@ class APIGuard:
             ]
             if self.config_dir is not None:
                 command += ["--config-dir", self.config_dir]
-            self._process = subprocess.Popen(command)
+            self._process = subprocess.Popen(
+                command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
 
             deadline = time.monotonic() + self.startup_timeout
             while time.monotonic() < deadline:

@@ -24,6 +24,7 @@ dependencies = [
     "prompt-toolkit>=3.0.52",
     "rich>=14.2.0",
     "uvicorn>=0.52.4",
+    "websockets>=16.0",
 ]
 
 [project.scripts]
