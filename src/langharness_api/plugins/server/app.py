@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import Depends, FastAPI
@@ -25,6 +27,14 @@ from langharness_config.contracts import Configs
 from langharness_core.common.dependencies import get_db_session
 from langharness_logging.contracts import LogProvider
 from langharness_plugin.validation import ContractGuard
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    registry = getattr(app.state, "client_registry", None)
+    if registry is not None:
+        registry.mark_ready()
+    yield
 
 
 @ComponentFactory("api-server-factory")
@@ -125,7 +135,9 @@ class APIServerService:
         self._current_app = self.build_app()
 
     def build_app(self) -> FastAPI:
-        app = FastAPI(title="langharness_api", version="0.1.0")
+        app = FastAPI(
+            title="langharness_api", version="0.1.0", lifespan=_lifespan
+        )
         app.state.configs = self._configs
         app.state.log = self._log_provider
         if self._log_provider is not None:

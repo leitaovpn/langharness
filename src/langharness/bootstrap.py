@@ -109,6 +109,19 @@ def parse_options(argv: list[str]) -> tuple[Namespace, list[str]]:
         dest="config_dir",
         default=os.environ.get("LANG_HARNESS_DIR", DEFAULT_CONFIG_DIR),
     )
+    parser.add_argument(
+        "--auto-shutdown",
+        action="store_true",
+        default=False,
+        help="exit the server after its last client detaches",
+    )
+    parser.add_argument(
+        "--auto-shutdown-grace",
+        type=float,
+        default=10.0,
+        metavar="SECONDS",
+        help="grace window before auto-shutdown (default 10)",
+    )
     return parser.parse_known_args(argv)
 
 
@@ -355,7 +368,12 @@ def _run(options: Namespace, remainder: list[str]) -> int:
             )
             if server_service is None:
                 raise BootstrapError("Server package did not provide server.server")
-            server_service.server(options.server_ip, options.server_port)
+            server_service.server(
+                options.server_ip,
+                options.server_port,
+                auto_shutdown=options.auto_shutdown,
+                grace=options.auto_shutdown_grace,
+            )
             return 0
 
         if options.mode == "all":

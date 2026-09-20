@@ -52,6 +52,23 @@ def test_parse_options_accepts_config_dir_alias_and_ui_arguments(tmp_path) -> No
     assert remainder == ["--provider", "demo"]
 
 
+def test_parse_options_auto_shutdown_defaults() -> None:
+    options, remainder = bootstrap_module.parse_options([])
+    assert options.auto_shutdown is False
+    assert options.auto_shutdown_grace == 10.0
+    assert remainder == []
+
+
+def test_parse_options_auto_shutdown_flags() -> None:
+    options, remainder = bootstrap_module.parse_options(
+        ["--mode", "server", "--auto-shutdown", "--auto-shutdown-grace", "0.5"]
+    )
+    assert options.mode == "server"
+    assert options.auto_shutdown is True
+    assert options.auto_shutdown_grace == 0.5
+    assert remainder == []
+
+
 def test_load_package_validates_import_path_and_result() -> None:
     package = load_package(
         "langharness_config.plugin:builtin_package",
@@ -262,8 +279,8 @@ def test_run_assembles_real_ui_and_server_managers(
 
     calls = []
 
-    def server(self, host: str, port: int) -> None:
-        calls.append(("server", host, port))
+    def server(self, host, port, auto_shutdown=False, grace=10.0) -> None:
+        calls.append(("server", host, port, auto_shutdown, grace))
 
     def run(self, config) -> int:
         calls.append(("ui", dict(config)))
@@ -275,10 +292,12 @@ def test_run_assembles_real_ui_and_server_managers(
         "server_ip": "127.0.0.2",
         "server_port": 19000,
         "config_dir": str(tmp_path),
+        "auto_shutdown": False,
+        "auto_shutdown_grace": 10.0,
     }
 
     assert bootstrap_module._run(SimpleNamespace(mode="server", **base), []) == 0
-    assert calls[0] == ("server", "127.0.0.2", 19000)
+    assert calls[0] == ("server", "127.0.0.2", 19000, False, 10.0)
     assert bootstrap_module._run(
         SimpleNamespace(mode="ui", **base), ["interactive"]
     ) == 8

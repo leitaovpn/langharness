@@ -63,7 +63,13 @@ class APIServerProvider(Protocol):
 class ServerServerProvider(Protocol):
     def set_agent(self, agent: Any) -> None: ...
 
-    def server(self, host: str, port: int) -> None: ...
+    def server(
+        self,
+        host: str,
+        port: int,
+        auto_shutdown: bool = False,
+        grace: float = 10.0,
+    ) -> None: ...
 
 
 @service_contract(SPEC_UI_SDK)

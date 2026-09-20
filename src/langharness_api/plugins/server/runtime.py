@@ -13,6 +13,7 @@ from pelix.ipopo.decorators import (
     UnbindField,
 )
 
+from langharness_api.common.client_registry import ClientRegistry
 from langharness_api.contracts import APIServerProvider, ServerServerProvider
 from langharness_core.contracts import AgentServerProvider
 from langharness_plugin.validation import ContractGuard
@@ -48,10 +49,30 @@ class ServerServerService:
     def set_agent(self, agent: Any) -> None:
         self._agent = agent
 
-    def server(self, host: str, port: int) -> None:
+    def server(
+        self,
+        host: str,
+        port: int,
+        auto_shutdown: bool = False,
+        grace: float = 10.0,
+    ) -> None:
         if self._api is None:
             raise RuntimeError("API server service is unavailable")
         app = self._api.build_app()
         app.state.agent = self._agent
-        uvicorn.run(app, host=host, port=port, log_config=None)
+        config = uvicorn.Config(
+            app,
+            host=host,
+            port=port,
+            log_config=None,
+            timeout_graceful_shutdown=10,
+        )
+        server = uvicorn.Server(config)
+        registry = ClientRegistry(grace=grace)
+        registry.set_enabled(auto_shutdown)
+        registry.set_shutdown_callback(
+            lambda: setattr(server, "should_exit", True)
+        )
+        app.state.client_registry = registry
+        server.run()
 
