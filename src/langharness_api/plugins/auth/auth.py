@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, WebSocket
 from pelix.ipopo.decorators import ComponentFactory, Property, Provides
 
 from langharness_api.contracts import AuthProvider
@@ -25,6 +25,15 @@ class AuthPlugin:
     def get_auth_dependency(self) -> Callable[[Request], Any]:
         def dependency(request: Request) -> str:
             authorization = request.headers.get("authorization", "")
+            if authorization != f"Bearer {self._token}":
+                raise HTTPException(status_code=401, detail="Unauthorized")
+            return self._token
+
+        return dependency
+
+    def get_websocket_dependency(self) -> Callable[[WebSocket], Any]:
+        def dependency(websocket: WebSocket) -> str:
+            authorization = websocket.headers.get("authorization", "")
             if authorization != f"Bearer {self._token}":
                 raise HTTPException(status_code=401, detail="Unauthorized")
             return self._token
