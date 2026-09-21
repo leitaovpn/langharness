@@ -18,6 +18,9 @@ class ToolExport:
     args_schema: type[Any]
     target_scope: Literal["agent", "agent_instance"] = "agent"
     destructive: bool = False
+    #: Template for how a call reads in the CLI transcript, e.g.
+    #: ``"echo({text})"``. Empty means the call shows as its bare name.
+    headline: str = ""
 
 
 @dataclass(frozen=True, slots=True)

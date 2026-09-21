@@ -33,3 +33,21 @@ def test_explicit_export_is_wrapped_as_a_structured_tool() -> None:
 
 def test_adapter_without_target_exports_no_tools() -> None:
     assert ToolExportAdapter().get_tools() == []
+
+
+def test_exported_tools_carry_their_declared_headline() -> None:
+    adapter = ToolExportAdapter()
+    adapter._target = Target()
+    adapter._exports = [
+        ToolExport("add_numbers", "Add numbers", "add", AddArgs, headline="add({a}, {b})")
+    ]
+
+    assert adapter.get_tool_presentations() == {"add_numbers": "add({a}, {b})"}
+
+
+def test_an_export_without_a_headline_is_simply_absent() -> None:
+    adapter = ToolExportAdapter()
+    adapter._target = Target()
+    adapter._exports = [ToolExport("add_numbers", "Add numbers", "add", AddArgs)]
+
+    assert adapter.get_tool_presentations() == {}
