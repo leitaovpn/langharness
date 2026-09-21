@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+#
+# Real-LLM smoke for the CLI and the plugin lifecycle.
+#
+# Scope note: this script pipes commands into stdin, so sys.stdin.isatty() is
+# false and InteractiveCLIRunner takes its input() fallback. That means the
+# slash-command palette never renders here and this script cannot catch a
+# regression in it. Use scripts/cli_palette_smoke.py for that -- it allocates
+# a pty so the prompt_toolkit session is the one under test.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
