@@ -29,13 +29,18 @@ repr 丢给人看。
       ↓  ToolProvider.get_tool_presentations()
 agent_loop.describe()  聚合（新增 tool_headlines 键）
       ↓  GET /agents/{agent_id}/tools
-CLI runner        懒加载 + 按 agent 缓存
-      ↓  renderer.set_tool_catalog(catalog)
-renderer          用 tool_call 事件里的 args 套模板
+CLI runner        懒加载 + 按 agent 缓存，套模板
+      ↓  render_event({... "headline": "Bash(pwd)"})
+renderer          画 headline，不知道模板的存在
 ```
 
-职责线：**runner 管传输（HTTP 与身份），renderer 管呈现（套模板并画）**。
-模板本身跨进程传输，渲染在 CLI 本地完成 —— API 里不出现展示文案。
+职责线：**runner 管传输与解析（HTTP、身份、套模板），renderer 管画**。
+模板跨进程传，填充在 CLI 本地完成 —— API 里不出现展示文案。
+
+套模板放在 runner 而不是 renderer，是因为解析模板需要当前 agent 身份和
+一次 HTTP 取目录，那本来就是传输层的事。renderer 只读
+`event["headline"]`，缺失时回退到工具名 —— 因此**不需要给
+`InteractiveRenderer` 协议加任何方法**，renderer 也不必知道 agent 是谁。
 
 ## 描述符：模板字符串
 
@@ -66,11 +71,9 @@ JSON 可表达、无代码过线，多参数与自定义分隔符都能写。
 
 新路由 `GET /agents/{agent_id}/tools` → `{"tools": [{"name", "headline"}]}`。
 
-目录交给渲染器的方式：`set_tool_catalog(catalog)` 加进
-`InteractiveRenderer` 协议。唯一实现是 `RichInteractiveRenderer`，测试里的
-假渲染器跟着补一个空实现即可。不用 `hasattr` 探测 —— 那种写法 pyright
-检查不过（`show_welcome_banner` 那次已经踩过），而显式方法让依赖可被
-类型检查。
+CLI 侧按 agent 缓存目录：成功缓存结果，失败缓存空表并且在下一次
+`start_response()` 清空缓存 —— 这样服务端故障时每个响应最多只重试一次，
+不会变成每个工具调用一次。
 
 `ToolProvider` 协议增加 `get_tool_presentations() -> Mapping[str, str]`，
 四个实现都要提供（`workspace`、`management`、`export_adapter`、
