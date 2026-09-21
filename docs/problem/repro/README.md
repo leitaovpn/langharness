@@ -8,6 +8,7 @@
 | `repro_loop_death.py` | agent-loop-permanent-death | 假 LLM + 真实 API server 子进程；S1 带凭据 → S2 省略凭据 → 503，S3 仍 503。确定性复现 loop 永久死亡 |
 | `repro_delta_drop.py` | stream-delta-drop | 假 LLM 按 chunk 依次发 `["scope","-marker","-","7","7"]`，`/stream` 只转发 `scope-marker-7`。确定性复现重复 delta 被吞 |
 | `repro_bare_sdk.py` | responses-protocol-gateway-500 | 需在含 `langharness.toml`（`[providers.chatgpt-5]`）的目录下运行，用裸 openai SDK 对比 `/responses`（500）与 `/chat/completions`（正常）。会真实请求外部网关，按需运行 |
+| `repro_ctrl_o_no_collapse.py` | ctrl-o-expansion-never-collapses | 假 LLM + 真实 CLI 跑在 pty 里，发一条消息后连按两次 ctrl+o：第一次出详情、第二次必须收回。修复前第二次只是再打一份，收不回。pty 会回应 CPR，屏幕即真实终端画面 |
 
 ## 注意事项
 

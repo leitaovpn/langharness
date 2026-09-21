@@ -1437,7 +1437,8 @@ git commit -m "test: cover the tool call rows in the real-binary smoke"
 - [ ] `● ToolName(args)` 与 `⎿ 输出` 在真实 CLI 上按设计形态出现
 - [ ] 未声明模板的工具显示为裸名，不显示 repr
 - [ ] `(ctrl+o to expand)` 只在输出被截断时出现，且只在终端下出现
-- [ ] `ctrl+o` 在提示符下能打印完整参数与输出
+- [x] `ctrl+o` 在提示符下开合详情：第一次展开完整参数与输出，第二次收回
+  （原计划的"重打"形态按 `docs/problem/2026-09-21-ctrl-o-expansion-never-collapses.md` 改为可收起的细节面板）
 - [ ] `get_tool_presentations` 覆盖度测试对四个 provider 都通过
 - [ ] ruff / mypy / pyright 全清，覆盖率 ≥ 95%
 - [ ] 服务端不可达时 transcript 不中断，工具行回退到裸名
