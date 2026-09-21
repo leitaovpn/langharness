@@ -283,3 +283,43 @@ def test_agents_route_reports_missing_registry() -> None:
 def test_agents_route_plugin_info() -> None:
     plugin = AgentsRoutePlugin()
     assert plugin.get_plugin_info() == {"name": "agents", "version": "1.0.0"}
+
+
+class FakeLoop:
+    def describe(self) -> dict[str, Any]:
+        return {"tools": ["bash"], "tool_headlines": {"bash": "Bash({commands})"}}
+
+
+class FakeLoopDirectory(FakeDirectory):
+    def get_loop(self, agent_id: str) -> Any:
+        return FakeLoop() if agent_id == "simple_agent" else None
+
+
+def test_agents_route_lists_tool_templates() -> None:
+    plugin = AgentsRoutePlugin()
+    plugin._agent_directory = FakeLoopDirectory()
+
+    response = make_client(plugin).get("/agents/simple_agent/tools")
+
+    assert response.status_code == 200
+    assert response.json()["tools"] == [
+        {"name": "bash", "headline": "Bash({commands})"}
+    ]
+
+
+def test_agents_route_reports_an_unknown_agent() -> None:
+    plugin = AgentsRoutePlugin()
+    plugin._agent_directory = FakeLoopDirectory()
+
+    response = make_client(plugin).get("/agents/nobody/tools")
+
+    # The detail distinguishes this from the framework's own 404 for a route
+    # that does not exist, which is what an unregistered path would give.
+    assert response.status_code == 404
+    assert "nobody" in response.json()["detail"]
+
+
+def test_agents_route_reports_a_missing_directory() -> None:
+    plugin = AgentsRoutePlugin()
+
+    assert make_client(plugin).get("/agents/simple_agent/tools").status_code == 503

@@ -95,6 +95,31 @@ class AgentsRoutePlugin:
                 )
             return {"agents": self._agent_registry.list_agents()}
 
+        @router.get("/agents/{agent_id}/tools")
+        def list_agent_tools(agent_id: str) -> dict[str, Any]:
+            """Tool names with the template each call reads as.
+
+            Clients render the transcript from this; a tool missing from
+            ``tool_headlines`` simply shows as its bare name.
+            """
+            if self._agent_directory is None:
+                raise HTTPException(
+                    status_code=503, detail="Agent directory unavailable"
+                )
+            loop = self._agent_directory.get_loop(agent_id)
+            if loop is None:
+                raise HTTPException(
+                    status_code=404, detail=f"Unknown agent: {agent_id}"
+                )
+            described = loop.describe()
+            headlines = described.get("tool_headlines") or {}
+            return {
+                "tools": [
+                    {"name": name, "headline": headlines.get(name, "")}
+                    for name in described.get("tools") or []
+                ]
+            }
+
         @router.post("/agents")
         def create_agent(payload: AgentCreateRequest = Body(...)) -> dict[str, Any]:
             registry = self._require_registry()
