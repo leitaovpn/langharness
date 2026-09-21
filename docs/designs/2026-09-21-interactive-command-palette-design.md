@@ -160,9 +160,45 @@ prompt_toolkit 没有"视觉选中但不落字"的模式，**该钩子已删除*
 provider 名、路径是开放集，散射匹配错多于对，故参数段用
 大小写不敏感前缀匹配。
 
+## 后续修正：嵌套语法
+
+初版只补全**第一个**参数，且候选源签名是 `(prefix) -> values`，拿不到
+前面的词。`/plugins` 的语法有 2~4 层（`runtime set <scope> <plugin>
+KEY=VALUE`、`config enable|disable <scope> <plugin>`），这个签名表达不了，
+所以 `/plugins discover` 不会补全，而且注册候选源也修不好第二层。
+
+两处改动：
+
+- `ArgumentSource` 改为 `(words, prefix) -> values`，`PaletteCompleter`
+  把 `head[1:].split(" ")` 拆成 (命令, 已输入的参数词, 当前词前缀)；
+  "第三段起一律不补全"那条硬规则删除，改由候选源自己决定。
+- `InteractiveCommandSpec` 增加可选 `complete` 字段。补全语法归**命令
+  插件**所有，runner 不再持有任何语法。这推翻了本设计初稿的"非目标"
+  里"候选来源协议化"一项——当时判为 YAGNI，但嵌套语法的需求出现后，
+  把动作表复制到 runner（第三份副本）才是真正的错。
+
+### `/plugins` 语法表
+
+`/plugins` 的合法动作原先写在三处并对不上：argparse `choices` 有
+`upgrade` 没有 `set`/`history`/`rollback`，交互 `_handle` 反过来，
+`_usage()` 又是第三份手写字符串。git 历史显示这是**逐次提交 accretion**
+的结果而非设计决定（`f8664c9` 引入 `_handle` 时只带该提交需要的 6 个
+动作，后续提交按需追加，`upgrade` 始终没人需要）。
+
+现在收敛为一张 `ACTIONS` 表，`Position` 描述每个槽位，`Action` 用多个
+`forms` 表达 `config` 这类多形态动作。四个消费点全部派生：`_handle`
+的动作校验、`usage_text()`、补全、argparse `choices`。每个动作显式声明
+`interactive` / `cli` 支持面——漂移从"没人写过"变成"写了但写错"。
+
+补全只提供本地可枚举的槽位（runtime scope、config scope、动词）；插件名、
+版本号、`KEY=VALUE` 都在服务端，返回空而不是阻塞按键。
+
 ## 非目标
 
 - 分组分隔线（扁平列表无原生支持，11 个命令收益不足）；
-- 候选来源协议化（需扩 `InteractiveCommandSpec`，溢出到 contracts 与
-  5 个命令插件）；
-- 补全菜单以外的 TUI 改造。
+- 补全菜单以外的 TUI 改造；
+- 统一两个前端的调用约定。交互模式用位置参数传 scope
+  （`/plugins install <pkg> <contrib> <scope>`），非交互 CLI 用 `--scope`
+  标志（`plugins install <pkg> <contrib> --scope X`）。语法表目前只描述
+  交互形态，argparse 侧取动作集。合并两套约定是破坏性的 CLI 行为变更，
+  不混在这个修复里。
