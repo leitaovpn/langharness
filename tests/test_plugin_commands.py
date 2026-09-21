@@ -8,7 +8,10 @@ from typing import Any
 import httpx
 import pytest
 
-from langharness_cli.plugins.commands.plugins import PluginCommandPlugin
+from langharness_cli.plugins.commands.plugins import (
+    HANDLED_ACTIONS,
+    PluginCommandPlugin,
+)
 
 SCOPE_CONFIG = {
     "scope": "api",
@@ -854,3 +857,120 @@ def test_noninteractive_list_without_scope_renders_scope_column(
     output = capsys.readouterr().out
     assert "Runtime plugins · all scopes" in output
     assert "agent:a" in output
+
+
+# --- grammar table and completion ------------------------------------------
+
+
+def complete(words: list[str], prefix: str = "") -> list[str]:
+    # Context is the local fake; _complete ignores it, the grammar is static.
+    return list(PluginCommandPlugin()._complete(Context(), words, prefix))  # type: ignore[arg-type]
+
+
+def test_completion_offers_every_action_at_the_first_slot() -> None:
+    offered = complete([])
+
+    assert "discover" in offered
+    assert "runtime" in offered
+    assert "upgrade" in offered
+
+
+def test_completion_narrows_the_action_by_prefix() -> None:
+    assert complete([], "disc") == ["discover"]
+
+
+def test_completion_offers_the_runtime_set_verb() -> None:
+    assert complete(["runtime"], "s") == ["set"]
+
+
+def test_completion_offers_runtime_scopes() -> None:
+    assert complete(["list"], "s") == ["server"]
+    assert complete(["list"]) == ["root", "server", "ui", "agent"]
+
+
+def test_completion_offers_config_scopes_and_verbs() -> None:
+    # `agent` is a runtime scope but never a config one, so it is absent.
+    assert complete(["config"], "a") == ["api"]
+    assert complete(["config"]) == ["api", "cli", "enable", "disable"]
+
+
+def test_completion_declines_slots_it_cannot_enumerate() -> None:
+    # Plugin names, KEY=VALUE pairs and versions all live behind the API.
+    assert complete(["runtime", "set", "server"]) == []
+    assert complete(["set", "api", "my-plugin"]) == []
+    assert complete(["rollback", "api"]) == []
+    assert complete(["nonsense"], "") == []
+
+
+def test_completion_stops_at_the_end_of_an_action() -> None:
+    assert complete(["discover", "extra"]) == []
+
+
+def test_every_advertised_action_reaches_a_branch(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Completion advertises the table, so the handler must cover all of it.
+
+    Checked by dispatch rather than by comparing two sets: the sets are both
+    derived from the table now, so comparing them would only assert that the
+    table equals itself. The server is made unreachable, which every branch
+    must survive -- reaching an unimplemented action is what shows up as
+    "Unknown /plugins action".
+    """
+
+    def unreachable(*args: Any, **kwargs: Any) -> Any:
+        raise httpx.ConnectError("no server in this test")
+
+    for verb in ("get", "post", "put", "delete"):
+        monkeypatch.setattr(httpx, verb, unreachable)
+
+    plugin = make_plugin()
+    for name in sorted(HANDLED_ACTIONS):
+        plugin._handle(Context(), name)  # type: ignore[arg-type]
+        assert "Unknown /plugins action" not in capsys.readouterr().out
+
+
+def test_usage_lists_every_action() -> None:
+    from langharness_cli.plugins.commands.plugins import ACTIONS
+
+    usage = PluginCommandPlugin().usage_text()
+
+    for action in ACTIONS:
+        assert action.name in usage
+
+
+def test_plugins_upgrade_posts_to_the_runtime_upgrade_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def fake_post(url: str, **kwargs: Any) -> Response:
+        calls.append((url, kwargs))
+        return Response({})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    handler_for("plugins")(Context(), "upgrade server real-echo")
+
+    assert calls[0][0] == "http://api/plugins/runtime/real-echo/upgrade"
+    assert calls[0][1]["params"] == {"scope": "server"}
+
+
+def test_plugins_upgrade_requires_scope_and_plugin(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    handler_for("plugins")(Context(), "upgrade")
+
+    assert "Scope is required" in capsys.readouterr().out
+
+
+def test_completion_walks_into_the_variadic_tail() -> None:
+    # `runtime set <scope> <plugin> KEY=VALUE...`: past the fixed slots there
+    # is nothing to enumerate, but the walk still has to land on the tail
+    # rather than stopping at the last declared slot.
+    assert complete(["runtime", "set", "server", "my-plugin", "limit=5"]) == []
+
+
+def test_completion_accepts_a_config_verb_in_the_verb_slot() -> None:
+    assert complete(["config", "enable"], "a") == ["api"]
+    assert complete(["config", "enable", "api", "my-plugin"]) == []

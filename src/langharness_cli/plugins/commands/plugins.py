@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 from argparse import ArgumentParser, Namespace
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
@@ -38,6 +40,207 @@ def _is_config_scope(value: str) -> bool:
     )
 
 
+# --- grammar ---------------------------------------------------------------
+#
+# One description of what /plugins accepts, consumed by four things: the
+# handler's action lookup, the usage text, the argument completion, and the
+# non-interactive parser's action list. Before this table the action set was
+# written out three times and had drifted -- `upgrade` existed only on the
+# argparse side, `set`/`history`/`rollback` only on the interactive one.
+
+
+@dataclass(frozen=True)
+class Position:
+    """One argument slot. ``kind`` says what may stand there."""
+
+    name: str
+    kind: str
+    literal: str = ""
+    variadic: bool = False
+
+
+@dataclass(frozen=True)
+class Action:
+    """An action and its alternative argument lists.
+
+    Several forms rather than one optional-argument list, because ``config``
+    genuinely takes two shapes (``config [scope]`` and
+    ``config enable|disable <scope> <plugin>``) and a single positional list
+    cannot say that without also accepting half-typed hybrids.
+    """
+
+    name: str
+    summary: str
+    forms: tuple[tuple[Position, ...], ...]
+    #: Which front-ends implement it. Declaring this is what makes the
+    #: drift visible: before, an action present on one side and absent on
+    #: the other looked exactly like an action nobody had needed yet.
+    interactive: bool = True
+    cli: bool = True
+
+
+def _slot(name: str, kind: str) -> Position:
+    return Position(name, kind)
+
+
+ACTIONS: tuple[Action, ...] = (
+    Action("discover", "Rescan and list discovered plugin packages", ((),)),
+    Action(
+        "list",
+        "List registered runtime plugins",
+        ((), (_slot("runtime_scope", "runtime_scope"),)),
+    ),
+    Action(
+        "config",
+        "Show or change persisted plugin configuration",
+        (
+            (),
+            (_slot("config_scope", "config_scope"),),
+            (
+                Position("verb", "config_verb"),
+                _slot("config_scope", "config_scope"),
+                _slot("plugin", "plugin"),
+            ),
+        ),
+    ),
+    Action(
+        "runtime",
+        "Update properties of an installed plugin instance",
+        (
+            (
+                Position("set", "literal", literal="set"),
+                _slot("runtime_scope", "runtime_scope"),
+                _slot("plugin", "plugin"),
+                Position("KEY=VALUE", "key_value", variadic=True),
+            ),
+        ),
+    ),
+    Action(
+        "install",
+        "Install a discovered contribution",
+        (
+            (
+                _slot("package_id", "package_id"),
+                _slot("contribution_id", "contribution_id"),
+                _slot("scope", "scope_id"),
+            ),
+        ),
+    ),
+    Action(
+        "uninstall",
+        "Remove an installed plugin",
+        ((_slot("runtime_scope", "runtime_scope"), _slot("plugin", "plugin")),),
+    ),
+    Action(
+        "set",
+        "Merge configuration into a plugin",
+        (
+            (
+                _slot("config_scope", "config_scope"),
+                _slot("plugin", "plugin"),
+                Position("KEY=VALUE", "key_value", variadic=True),
+            ),
+        ),
+        cli=False,
+    ),
+    Action(
+        "enable",
+        "Enable a runtime plugin",
+        ((_slot("runtime_scope", "runtime_scope"), _slot("plugin", "plugin")),),
+    ),
+    Action(
+        "disable",
+        "Disable a runtime plugin",
+        ((_slot("runtime_scope", "runtime_scope"), _slot("plugin", "plugin")),),
+    ),
+    Action(
+        "upgrade",
+        "Upgrade an installed plugin",
+        ((_slot("runtime_scope", "runtime_scope"), _slot("plugin", "plugin")),),
+    ),
+    Action(
+        "history",
+        "Show configuration history for a scope",
+        ((_slot("config_scope", "config_scope"),),),
+        cli=False,
+    ),
+    Action(
+        "rollback",
+        "Roll a scope back to an earlier version",
+        (
+            (
+                _slot("config_scope", "config_scope"),
+                _slot("version", "version"),
+            ),
+        ),
+        cli=False,
+    ),
+)
+
+ACTION_BY_NAME = {action.name: action for action in ACTIONS}
+
+#: What completion may offer for a slot kind. Kinds that are absent --
+#: plugin names, package ids, versions, KEY=VALUE pairs -- live behind the
+#: API, and a candidate list must never block the keystroke on a round trip.
+SLOT_CANDIDATES: dict[str, tuple[str, ...]] = {
+    # Bare `agent` is a runtime scope but not a config scope: the config
+    # vocabulary is api|cli|agent:<id>, so offering `agent` there would
+    # insert a value the handler immediately rejects.
+    "runtime_scope": ("root", "server", "ui", "agent"),
+    "config_scope": ("api", "cli"),
+    "config_verb": ("enable", "disable"),
+}
+
+#: The action set each front-end offers, derived rather than restated.
+HANDLED_ACTIONS = frozenset(a.name for a in ACTIONS if a.interactive)
+CLI_ACTIONS = tuple(a.name for a in ACTIONS if a.cli)
+
+
+def _slot_at(form: Sequence[Position], index: int) -> Position | None:
+    if index < len(form):
+        return form[index]
+    if form and form[-1].variadic:
+        return form[-1]
+    return None
+
+
+def _accepts(position: Position, word: str) -> bool:
+    """Whether a typed word could stand in this slot.
+
+    Only the kinds this module can judge locally are checked; package ids,
+    plugin names and KEY=VALUE pairs are accepted as typed.
+    """
+    if position.kind == "literal":
+        return word == position.literal
+    if position.kind == "runtime_scope":
+        return _is_runtime_scope(word)
+    if position.kind == "config_scope":
+        return _is_config_scope(word)
+    if position.kind == "config_verb":
+        return word in SLOT_CANDIDATES["config_verb"]
+    return True
+
+
+def _form_still_fits(form: Sequence[Position], arguments: Sequence[str]) -> bool:
+    for index, word in enumerate(arguments):
+        position = _slot_at(form, index)
+        if position is None or not _accepts(position, word):
+            return False
+    return True
+
+
+def _slot_text(position: Position) -> str:
+    if position.kind == "literal":
+        return position.literal
+    return f"<{position.name}>" + ("..." if position.variadic else "")
+
+
+def _narrowed(values: Iterable[str], prefix: str) -> list[str]:
+    """Plain prefix filter, matching what the palette does to any source."""
+    wanted = prefix.lower()
+    return [value for value in values if value.lower().startswith(wanted)]
+
+
 @ComponentFactory("cli-plugins-command-factory")
 @Provides(CLICommandProvider)
 @Property("_plugin_name", "plugin.name", "plugin-command")
@@ -67,17 +270,7 @@ class PluginCommandPlugin:
     def _add_arguments(parser: ArgumentParser) -> None:
         parser.add_argument(
             "action",
-            choices=(
-                "discover",
-                "list",
-                "runtime",
-                "config",
-                "install",
-                "enable",
-                "disable",
-                "upgrade",
-                "uninstall",
-            ),
+            choices=CLI_ACTIONS,
         )
         parser.add_argument("values", nargs="*")
         parser.add_argument("--scope")
@@ -174,13 +367,62 @@ class PluginCommandPlugin:
             InteractiveCommandSpec(
                 name="plugins",
                 help=(
-                    "Plugin management: discover|list|runtime|config|install|uninstall|"
-                    "set|enable|disable|history|rollback "
-                    "[scope]; list accepts runtime scopes such as server, ui, agent, or agent:<id>"
+                    "Plugin management: "
+                    + "|".join(action.name for action in ACTIONS)
+                    + " [scope]; scopes are root, server, ui, api, cli, or agent:<id>"
                 ),
                 handler=self._handle,
+                complete=self._complete,
             )
         ]
+
+    def _complete(
+        self,
+        context: InteractiveCommandContext,
+        words: Sequence[str],
+        prefix: str,
+    ) -> list[str]:
+        """Candidates for the slot the cursor is in.
+
+        Walks the grammar table, so a word is offered only where it could
+        legally stand: `/plugins` offers actions, `/plugins runtime` offers
+        ``set``, and a slot holding a plugin name offers nothing, because
+        names live behind the API.
+        """
+        del context  # The grammar is static; it needs no runtime state.
+        if not words:
+            return _narrowed((action.name for action in ACTIONS), prefix)
+        action = ACTION_BY_NAME.get(words[0])
+        if action is None:
+            return []
+        arguments = list(words[1:])
+        offered: list[str] = []
+        for form in action.forms:
+            if not _form_still_fits(form, arguments):
+                continue
+            position = _slot_at(form, len(arguments))
+            if position is None:
+                continue
+            values = (
+                (position.literal,)
+                if position.kind == "literal"
+                else SLOT_CANDIDATES.get(position.kind, ())
+            )
+            for value in values:
+                # No pair of forms overlaps on a slot today, so this is a
+                # guard against a future table edit rather than a live path.
+                if value not in offered:  # pragma: no cover
+                    offered.append(value)
+        return _narrowed(offered, prefix)
+
+    def usage_text(self) -> str:
+        """The accepted spellings, generated from the grammar table."""
+        lines: list[str] = []
+        for action in ACTIONS:
+            for form in action.forms:
+                slots = " ".join(_slot_text(position) for position in form)
+                lines.append(f"/plugins {action.name}" + (f" {slots}" if slots else ""))
+        return "\n".join(lines)
 
     def get_plugin_info(self) -> dict[str, str]:
         return {"name": self._plugin_name, "version": self._plugin_version}
@@ -191,6 +433,10 @@ class PluginCommandPlugin:
             self._usage()
             return False
         action, arguments = words[0].lower(), words[1:]
+        if action not in HANDLED_ACTIONS:
+            print(f"Unknown /plugins action: {action}")
+            self._usage()
+            return False
         try:
             if action == "list":
                 self._list(context, arguments)
@@ -206,13 +452,17 @@ class PluginCommandPlugin:
                 self._uninstall(context, arguments)
             elif action == "set":
                 self._update(context, action, arguments)
-            elif action in ("enable", "disable"):
-                self._set_runtime_enabled(context, action, arguments)
+            elif action in ("enable", "disable", "upgrade"):
+                self._mutate_runtime_plugin(context, action, arguments)
             elif action == "history":
                 self._history(context, arguments)
             elif action == "rollback":
                 self._rollback(context, arguments)
             else:
+                # The guard above already rejected anything outside the
+                # table, so reaching here means an action was advertised
+                # without a branch -- the `upgrade` bug, caught by
+                # test_every_advertised_action_reaches_a_branch.
                 print(f"Unknown /plugins action: {action}")
                 self._usage()
         except (httpx.HTTPError, ValueError) as exc:
@@ -220,19 +470,7 @@ class PluginCommandPlugin:
         return False
 
     def _usage(self) -> None:
-        print(
-            "usage: /plugins discover"
-            " | /plugins list [runtime_scope]"
-            " | /plugins runtime set <scope> <plugin> KEY=VALUE [KEY=VALUE ...]"
-            " | /plugins config [config_scope]"
-            " | /plugins config enable|disable <config_scope> <plugin>"
-            " | /plugins history <config_scope>"
-            " | /plugins rollback <config_scope> <version>"
-            " | /plugins install <package_id> <contribution_id> <scope>"
-            " | /plugins uninstall <scope> <plugin_name>"
-            " | /plugins set <config_scope> <plugin> KEY=VALUE"
-            " | /plugins enable|disable <runtime_scope> <plugin>"
-        )
+        print("usage:\n" + self.usage_text())
 
     def _list(self, context: InteractiveCommandContext, arguments: list[str]) -> None:
         scope = arguments[0] if arguments else None
@@ -333,20 +571,29 @@ class PluginCommandPlugin:
         )
         self._registration_table("Installed plugin", payload)
 
-    def _set_runtime_enabled(
+    def _mutate_runtime_plugin(
         self, context: InteractiveCommandContext, action: str, arguments: list[str]
     ) -> None:
+        """The three two-argument runtime actions: enable, disable, upgrade."""
         if len(arguments) != 2 or not _is_runtime_scope(arguments[0]):
             print("Scope is required. Specify root, server, ui, agent, or agent:<id>.")
             self._usage()
             return
         scope, name = arguments
-        payload = self._put_raw(
-            context,
-            f"/plugins/runtime/{name}/enabled",
-            {"enabled": action == "enable"},
-            params={"scope": scope},
-        )
+        if action == "upgrade":
+            payload = self._post_raw(
+                context,
+                f"/plugins/runtime/{name}/upgrade",
+                {},
+                params={"scope": scope},
+            )
+        else:
+            payload = self._put_raw(
+                context,
+                f"/plugins/runtime/{name}/enabled",
+                {"enabled": action == "enable"},
+                params={"scope": scope},
+            )
         self._registration_table("Runtime plugin updated", payload)
 
     def _uninstall(

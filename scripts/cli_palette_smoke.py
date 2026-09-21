@@ -86,6 +86,24 @@ STEPS: list[tuple[str, str, tuple[str, ...], tuple[str, ...]]] = [
         ("demo", "staging"),
         ("default",),
     ),
+    (
+        "\x15/plugins d",
+        "/plugins offers its own actions",
+        ("discover", "disable"),
+        (),
+    ),
+    (
+        "\x15/plugins runtime s",
+        "/plugins completes a nested slot",
+        ("set",),
+        (),
+    ),
+    (
+        "et ",
+        "and the slot after it is a scope",
+        ("root", "server"),
+        (),
+    ),
 ]
 
 
