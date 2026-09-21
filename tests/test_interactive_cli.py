@@ -14,6 +14,7 @@ import pytest
 from prompt_toolkit.completion import CompleteEvent
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import fragment_list_to_text
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.shortcuts import CompleteStyle
 
 import langharness_cli.common.interactive as interactive_module
@@ -1048,3 +1049,23 @@ def test_a_failing_catalogue_leaves_the_transcript_intact(
     # exists at all: the point is that a failed lookup is survivable.
     assert attempts == ["http://api/agents/simple_agent/tools"]
     assert any(event["type"] == "assistant" for event in seen)
+
+
+def test_ctrl_o_is_bound_to_expanding_the_transcript() -> None:
+    expanded: list[bool] = []
+
+    class Recording(RichInteractiveRenderer):
+        def expand_last(self) -> None:
+            expanded.append(True)
+
+    runner = InteractiveCLIRunner(
+        base_url="http://api", token="secret", commands=[], renderer=Recording()
+    )
+    bindings = runner._key_bindings()
+    ctrl_o = next(
+        binding for binding in bindings.bindings if binding.keys == (Keys.ControlO,)
+    )
+
+    ctrl_o.handler(None)
+
+    assert expanded == [True]

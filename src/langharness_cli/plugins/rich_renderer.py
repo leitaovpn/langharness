@@ -153,6 +153,47 @@ class RichInteractiveRenderer:
         self._flush_live()
         self._status = "idle"
 
+    def expand_last(self) -> None:
+        """Print the tool calls of the last response in full.
+
+        This is the other half of the collapsed row: the transcript shows one
+        line per call, and this is where the arguments and the whole output
+        come back. Printing cannot be undone, so this repeats rather than
+        toggling.
+        """
+        runs = list(self._tool_runs.values())
+        if not runs:
+            self.console.print(
+                tr(self._locale, "tool_nothing_to_expand"), style="dim"
+            )
+            return
+        self.console.print(tr(self._locale, "tool_expand_header"), style="dim")
+        for run in runs:
+            meta = self._result_meta(run)
+            self.console.print(
+                Text.assemble(
+                    ("● ", "green"),
+                    (run.headline, "bold"),
+                    (f" ({meta})" if meta else "", "dim"),
+                )
+            )
+            self.console.print(
+                Text.assemble(
+                    (f"  {tr(self._locale, 'tool_expand_args')} ", "dim"),
+                    (str(run.args), ""),
+                ),
+                markup=False,
+                highlight=False,
+            )
+            self.console.print(
+                Text.assemble(
+                    (f"  {tr(self._locale, 'tool_expand_output')} ", "dim"),
+                    (run.output.rstrip() or tr(self._locale, "tool_no_output"), ""),
+                ),
+                markup=False,
+                highlight=False,
+            )
+
     def show_error(self, message: str) -> None:
         self._flush_live()
         self._status = "error"

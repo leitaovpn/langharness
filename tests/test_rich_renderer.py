@@ -540,3 +540,44 @@ def test_cut_output_advertises_the_expand_key(
     long_output = "\n".join(f"line {index}" for index in range(30))
 
     assert "ctrl+o" in _frame_after_output(monkeypatch, long_output)
+
+
+def test_expand_last_prints_full_arguments_and_output() -> None:
+    renderer, output = make_renderer()
+    renderer.start_response()
+    renderer.render_event(
+        {
+            "type": "tool_call",
+            "name": "bash",
+            "tool_call_id": "c1",
+            "args": {"commands": "pwd"},
+            "headline": "Bash(pwd)",
+        }
+    )
+    renderer.render_event(
+        {
+            "type": "tool_output",
+            "name": "bash",
+            "tool_call_id": "c1",
+            "output": "\n".join(f"line {index}" for index in range(30)),
+        }
+    )
+    renderer.finish_response()
+    output.truncate(0)
+    output.seek(0)
+
+    renderer.expand_last()
+
+    expanded = output.getvalue()
+    assert "Bash(pwd)" in expanded
+    assert "commands" in expanded
+    # The part the collapsed row withheld.
+    assert "line 29" in expanded
+
+
+def test_expand_last_before_any_call_says_so() -> None:
+    renderer, output = make_renderer()
+
+    renderer.expand_last()
+
+    assert "Nothing to expand" in output.getvalue()

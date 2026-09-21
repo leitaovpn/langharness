@@ -15,6 +15,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.completion import Completer
 from prompt_toolkit.history import FileHistory, History, InMemoryHistory
+from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.shortcuts import CompleteStyle
 
 from langharness_cli.common.completion import ArgumentSource, PaletteCompleter
@@ -81,7 +82,23 @@ class InteractiveCLIRunner:
                 history=history,
                 auto_suggest=AutoSuggestFromHistory(),
                 style=build_palette_style(),
+                key_bindings=self._key_bindings(),
             )
+
+    def _key_bindings(self) -> KeyBindings:
+        """Shell-level keys, which win over prompt_toolkit's defaults.
+
+        ctrl+o is taken from readline's operate-and-get-next. The transcript
+        is the thing worth acting on here, and that binding is obscure enough
+        to be worth the trade.
+        """
+        bindings = KeyBindings()
+
+        @bindings.add("c-o")
+        def _expand(event: Any) -> None:
+            self.renderer.expand_last()
+
+        return bindings
 
     def cmdloop(self, intro: str | None = None) -> None:
         self.renderer.show_welcome(intro or tr(self.locale, "intro"))
