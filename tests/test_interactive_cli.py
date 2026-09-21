@@ -9,6 +9,7 @@ import json
 import sys
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from prompt_toolkit.completion import CompleteEvent
 from prompt_toolkit.document import Document
@@ -906,3 +907,145 @@ def test_model_declares_its_own_completion_from_the_runner_providers() -> None:
     )
 
     assert _completions(runner, "/model de") == ["demo"]
+
+
+def _catalogue_response(url: str, tools: list[dict]) -> httpx.Response:
+    return httpx.Response(
+        200, json={"tools": tools}, request=httpx.Request("GET", url)
+    )
+
+
+def test_tool_call_events_arrive_at_the_renderer_with_a_headline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[dict] = []
+
+    class CapturingRenderer(RecordingRenderer):
+        def render_event(self, event):
+            seen.append(dict(event))
+
+    monkeypatch.setattr(
+        "langharness_cli.common.interactive.httpx.stream",
+        lambda *a, **k: stream_response(
+            [
+                {
+                    "type": "tool_call",
+                    "name": "bash",
+                    "tool_call_id": "c1",
+                    "args": {"commands": "pwd"},
+                },
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        "langharness_cli.common.interactive.httpx.get",
+        lambda url, **kwargs: _catalogue_response(
+            url, [{"name": "bash", "headline": "Bash({commands})"}]
+        ),
+    )
+    runner = InteractiveCLIRunner(
+        base_url="http://api",
+        token="secret",
+        commands=[],
+        renderer=CapturingRenderer(),
+        agent_id="simple_agent",
+    )
+    runner.do_stream("hi")
+
+    tool_call = next(event for event in seen if event["type"] == "tool_call")
+    assert tool_call["headline"] == "Bash(pwd)"
+
+
+def test_an_unknown_tool_falls_back_to_its_bare_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[dict] = []
+
+    class CapturingRenderer(RecordingRenderer):
+        def render_event(self, event):
+            seen.append(dict(event))
+
+    monkeypatch.setattr(
+        "langharness_cli.common.interactive.httpx.stream",
+        lambda *a, **k: stream_response(
+            [
+                {
+                    "type": "tool_call",
+                    "name": "bash",
+                    "tool_call_id": "c1",
+                    "args": {"commands": "pwd"},
+                },
+                {
+                    "type": "tool_call",
+                    "name": "mystery",
+                    "tool_call_id": "c2",
+                    "args": {"x": 1},
+                },
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        "langharness_cli.common.interactive.httpx.get",
+        lambda url, **kwargs: _catalogue_response(
+            url, [{"name": "bash", "headline": "Bash({commands})"}]
+        ),
+    )
+    runner = InteractiveCLIRunner(
+        base_url="http://api",
+        token="secret",
+        commands=[],
+        renderer=CapturingRenderer(),
+        agent_id="simple_agent",
+    )
+    runner.do_stream("hi")
+
+    calls = {event["name"]: event for event in seen if event["type"] == "tool_call"}
+    # The known tool proves the catalogue was consulted, so the absence on
+    # the unknown one means "declined", not "never looked".
+    assert calls["bash"]["headline"] == "Bash(pwd)"
+    assert "headline" not in calls["mystery"]
+
+
+def test_a_failing_catalogue_leaves_the_transcript_intact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[dict] = []
+
+    class CapturingRenderer(RecordingRenderer):
+        def render_event(self, event):
+            seen.append(dict(event))
+
+    attempts: list[str] = []
+
+    def refuse(url, **kwargs):
+        attempts.append(url)
+        raise httpx.ConnectError("no server")
+
+    monkeypatch.setattr(
+        "langharness_cli.common.interactive.httpx.stream",
+        lambda *a, **k: stream_response(
+            [
+                {
+                    "type": "tool_call",
+                    "name": "bash",
+                    "tool_call_id": "c1",
+                    "args": {"commands": "pwd"},
+                },
+                {"type": "assistant", "content": "done"},
+            ]
+        ),
+    )
+    monkeypatch.setattr("langharness_cli.common.interactive.httpx.get", refuse)
+    runner = InteractiveCLIRunner(
+        base_url="http://api",
+        token="secret",
+        commands=[],
+        renderer=CapturingRenderer(),
+        agent_id="simple_agent",
+    )
+    runner.do_stream("hi")
+
+    # Counting the attempt keeps this from passing before the catalogue
+    # exists at all: the point is that a failed lookup is survivable.
+    assert attempts == ["http://api/agents/simple_agent/tools"]
+    assert any(event["type"] == "assistant" for event in seen)

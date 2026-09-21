@@ -21,6 +21,7 @@ from langharness_cli.common.completion import ArgumentSource, PaletteCompleter
 from langharness_cli.common.i18n import tr
 from langharness_cli.common.session import DEFAULT_AGENT_ID, DEFAULT_USER_ID
 from langharness_cli.common.theme import build_palette_style
+from langharness_cli.common.toolview import render_headline
 from langharness_cli.contracts import InteractiveCommandSpec, InteractiveRenderer
 from langharness_cli.plugins.rich_renderer import RichInteractiveRenderer
 
@@ -63,6 +64,7 @@ class InteractiveCLIRunner:
         self.user_id = user_id
         self.agent_id = agent_id
         self.session_id = session_id
+        self._tool_headlines: dict[str, dict[str, str]] = {}
         self._update_model_status()
         self.commands: Mapping[str, InteractiveCommandSpec] = {
             command.name: command for command in commands
@@ -127,6 +129,7 @@ class InteractiveCLIRunner:
 
     def do_stream(self, line: str) -> None:
         self.renderer.start_response()
+        self._tool_headlines.clear()
         payload: dict[str, Any] = {
             "input": line,
             "model": self.model,
@@ -172,7 +175,9 @@ class InteractiveCLIRunner:
                             self._build_approval_decisions(action_requests, choice)
                         )
                         continue
-                    self.renderer.render_event(event)
+                    self.renderer.render_event(
+                        self._with_headline(event)
+                    )
         except (httpx.HTTPError, json.JSONDecodeError) as exc:
             self.renderer.show_error(str(exc))
         except KeyboardInterrupt:
@@ -220,7 +225,7 @@ class InteractiveCLIRunner:
             for line_text in response.iter_lines():
                 event = json.loads(line_text)
                 if not self._apply_session_event(event):
-                    self.renderer.render_event(event)
+                    self.renderer.render_event(self._with_headline(event))
 
     def _apply_session_event(self, event: Mapping[str, Any]) -> bool:
         if event.get("type") != "session":
@@ -314,6 +319,50 @@ class InteractiveCLIRunner:
     def refresh_status(self) -> None:
         """Re-render the status toolbar after identity changes."""
         self._update_model_status()
+
+    def _headlines_for(self, agent_id: str) -> dict[str, str]:
+        """Tool templates for one agent, fetched at most once per response.
+
+        A failed lookup is cached as empty so an unreachable server costs one
+        attempt rather than one per tool call; the cache is dropped at the
+        start of each response.
+        """
+        if agent_id not in self._tool_headlines:
+            self._tool_headlines[agent_id] = self._fetch_headlines(agent_id)
+        return self._tool_headlines[agent_id]
+
+    def _fetch_headlines(self, agent_id: str) -> dict[str, str]:
+        try:
+            response = httpx.get(
+                f"{self.base_url}/agents/{agent_id}/tools",
+                headers={"Authorization": f"Bearer {self.token}"},
+                timeout=5.0,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, json.JSONDecodeError):
+            return {}
+        return {
+            str(entry.get("name", "")): str(entry.get("headline", ""))
+            for entry in payload.get("tools") or []
+            if entry.get("name") and entry.get("headline")
+        }
+
+    def _with_headline(self, event: dict[str, Any]) -> dict[str, Any]:
+        """Stamp the rendered headline onto a tool_call event.
+
+        The renderer reads ``headline`` and never learns that templates
+        exist, so a command's presentation stays out of its way.
+        """
+        if event.get("type") != "tool_call":
+            return event
+        template = self._headlines_for(self.agent_id).get(str(event.get("name", "")))
+        if not template:
+            return event
+        rendered = render_headline(template, event.get("args") or {})
+        if rendered:
+            event["headline"] = rendered
+        return event
 
     def _update_model_status(self) -> None:
         if not hasattr(self.renderer, "set_model"):
