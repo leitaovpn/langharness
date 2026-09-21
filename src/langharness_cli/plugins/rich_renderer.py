@@ -153,46 +153,45 @@ class RichInteractiveRenderer:
         self._flush_live()
         self._status = "idle"
 
-    def expand_last(self) -> None:
-        """Print the tool calls of the last response in full.
+    def expansion_text(self) -> str:
+        """The detail the collapsed row withheld, as text.
 
-        This is the other half of the collapsed row: the transcript shows one
-        line per call, and this is where the arguments and the whole output
-        come back. Printing cannot be undone, so this repeats rather than
-        toggling.
+        Handed back rather than printed: a line written into the scrollback
+        can never be taken away again, so whoever draws this has to own it.
+        The caller decides where it goes, and can therefore also stop.
+
+        Cut to the window, because the caller draws it inside a region that
+        the terminal bounds -- on the scrollback length never mattered.
         """
+        lines = self._expansion_lines()
+        budget = max(1, self.console.height - LIVE_MARGIN)
+        if len(lines) > budget:
+            dropped = len(lines) - (budget - 1)
+            lines = [
+                *lines[: budget - 1],
+                tr(self._locale, "tool_expand_cut", count=dropped),
+            ]
+        return "\n".join(lines)
+
+    def _expansion_lines(self) -> list[str]:
         runs = list(self._tool_runs.values())
         if not runs:
-            self.console.print(
-                tr(self._locale, "tool_nothing_to_expand"), style="dim"
-            )
-            return
-        self.console.print(tr(self._locale, "tool_expand_header"), style="dim")
+            return [tr(self._locale, "tool_nothing_to_expand")]
+        lines = [
+            tr(self._locale, "tool_expand_header")
+            + tr(self._locale, "tool_collapse_hint")
+        ]
         for run in runs:
             meta = self._result_meta(run)
-            self.console.print(
-                Text.assemble(
-                    ("● ", "green"),
-                    (run.headline, "bold"),
-                    (f" ({meta})" if meta else "", "dim"),
-                )
-            )
-            self.console.print(
-                Text.assemble(
-                    (f"  {tr(self._locale, 'tool_expand_args')} ", "dim"),
-                    (str(run.args), ""),
-                ),
-                markup=False,
-                highlight=False,
-            )
-            self.console.print(
-                Text.assemble(
-                    (f"  {tr(self._locale, 'tool_expand_output')} ", "dim"),
-                    (run.output.rstrip() or tr(self._locale, "tool_no_output"), ""),
-                ),
-                markup=False,
-                highlight=False,
-            )
+            lines.append(f"● {run.headline}" + (f" ({meta})" if meta else ""))
+            lines.append(f"  {tr(self._locale, 'tool_expand_args')} {run.args}")
+            # Split, not embedded: the budget is counted in rows, and a
+            # multi-line output counted as one would blow through it.
+            output = run.output.rstrip() or tr(self._locale, "tool_no_output")
+            first, *rest = output.split("\n")
+            lines.append(f"  {tr(self._locale, 'tool_expand_output')} {first}")
+            lines.extend(rest)
+        return lines
 
     def show_error(self, message: str) -> None:
         self._flush_live()

@@ -81,9 +81,10 @@ class InteractiveRenderer(Protocol):
 
     def finish_response(self) -> None: ...
 
-    #: The escape hatch for whatever the transcript collapsed: a renderer
-    #: that summarises detail is expected to be able to give it back.
-    def expand_last(self) -> None: ...
+    #: The escape hatch for whatever the transcript collapsed: the detail is
+    #: given back as text, so that the caller can draw it somewhere it can
+    #: take away again. Printing it would be a one-way door.
+    def expansion_text(self) -> str: ...
 
     def show_error(self, message: str) -> None: ...
 

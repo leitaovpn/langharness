@@ -66,6 +66,9 @@ class InteractiveCLIRunner:
         self.agent_id = agent_id
         self.session_id = session_id
         self._tool_headlines: dict[str, dict[str, str]] = {}
+        #: Whether the detail pane is open; owned here because the prompt is
+        #: the only thing that can draw and retract it.
+        self._expanded = False
         self._update_model_status()
         self.commands: Mapping[str, InteractiveCommandSpec] = {
             command.name: command for command in commands
@@ -96,24 +99,48 @@ class InteractiveCLIRunner:
 
         @bindings.add("c-o")
         def _expand(event: Any) -> None:
-            self.renderer.expand_last()
+            """Open the detail pane, or close it again.
+
+            Nothing is printed here on purpose. The pane is part of the
+            prompt's own layout, so prompt_toolkit draws it and erases it; a
+            print would land in the scrollback and stay there, which is
+            exactly what made this key one-way.
+            """
+            self._expanded = not self._expanded
+            event.app.invalidate()
 
         return bindings
 
+    def _toolbar(self) -> str:
+        """What prompt_toolkit draws under the input line.
+
+        A callable, not a string: prompt_toolkit reads it on every repaint,
+        which is what lets the detail appear and disappear while the prompt
+        stays up.
+        """
+        status = (
+            self.renderer.get_status_text()
+            if hasattr(self.renderer, "get_status_text")
+            else f" {self.model} · {tr(self.locale, 'toolbar_hint')} "
+        )
+        if not self._expanded:
+            return status
+        # Detail above, status line at the bottom where a status line belongs.
+        return f"{self.renderer.expansion_text()}\n{status}"
+
     def cmdloop(self, intro: str | None = None) -> None:
         self.renderer.show_welcome(intro or tr(self.locale, "intro"))
-        if hasattr(self.renderer, "get_status_text"):
-            toolbar: Any = self.renderer.get_status_text
-        else:
-            toolbar = f" {self.model} · {tr(self.locale, 'toolbar_hint')} "
         while True:
+            # The pane describes the prompt it was opened at, so each new one
+            # starts closed -- including after a cancelled prompt.
+            self._expanded = False
             try:
                 line = (
                     self._session.prompt(
                         [("class:prompt", self.prompt)],
                         completer=self._command_completer(),
                         complete_style=CompleteStyle.COLUMN,
-                        bottom_toolbar=toolbar,
+                        bottom_toolbar=self._toolbar,
                     )
                     if self._interactive_input and self._session is not None
                     else input(self.prompt)

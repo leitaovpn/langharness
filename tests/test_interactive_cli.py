@@ -419,7 +419,8 @@ def test_cmdloop_uses_prompt_session_and_injected_renderer() -> None:
 
     assert "conversation" in renderer.welcome
     assert len(prompts) == 1
-    assert prompts[0][1]["bottom_toolbar"].startswith(" gpt-4o-mini")
+    # Read through the callable: prompt_toolkit re-reads it on every repaint.
+    assert prompts[0][1]["bottom_toolbar"]().startswith(" gpt-4o-mini")
 
 
 class RecordingRenderer:
@@ -1051,21 +1052,130 @@ def test_a_failing_catalogue_leaves_the_transcript_intact(
     assert any(event["type"] == "assistant" for event in seen)
 
 
-def test_ctrl_o_is_bound_to_expanding_the_transcript() -> None:
-    expanded: list[bool] = []
+DETAIL = "args: {'commands': 'pwd'}"
 
-    class Recording(RichInteractiveRenderer):
-        def expand_last(self) -> None:
-            expanded.append(True)
 
-    runner = InteractiveCLIRunner(
-        base_url="http://api", token="secret", commands=[], renderer=Recording()
-    )
+class _RendererWithDetail(RichInteractiveRenderer):
+    """A renderer whose last response has something to expand."""
+
+    def expansion_text(self) -> str:
+        return DETAIL
+
+
+class _KeyPress:
+    """Enough of prompt_toolkit's key event to carry one press."""
+
+    def __init__(self) -> None:
+        self.repaints = 0
+        self.app = self
+
+    def invalidate(self) -> None:
+        self.repaints += 1
+
+
+def _ctrl_o(runner: InteractiveCLIRunner):
     bindings = runner._key_bindings()
-    ctrl_o = next(
+    return next(
         binding for binding in bindings.bindings if binding.keys == (Keys.ControlO,)
     )
 
-    ctrl_o.handler(None)
 
-    assert expanded == [True]
+def _runner_with_detail(**kwargs) -> InteractiveCLIRunner:
+    return InteractiveCLIRunner(
+        base_url="http://api",
+        token="secret",
+        commands=kwargs.pop("commands", []),
+        renderer=_RendererWithDetail(),
+        **kwargs,
+    )
+
+
+def test_ctrl_o_opens_the_detail_and_the_same_key_closes_it() -> None:
+    runner = _runner_with_detail()
+    ctrl_o = _ctrl_o(runner)
+    event = _KeyPress()
+
+    ctrl_o.handler(event)
+    opened = runner._toolbar()
+
+    ctrl_o.handler(event)
+    closed = runner._toolbar()
+
+    assert DETAIL in opened
+    assert DETAIL not in closed
+
+
+def test_ctrl_o_asks_prompt_toolkit_to_repaint() -> None:
+    """Erasing the detail is prompt_toolkit's job, not a reprint's.
+
+    Without the invalidate the pane would never be drawn or taken back, which
+    is the shape of the bug this replaced: a key that only ever adds.
+    """
+    runner = _runner_with_detail()
+    event = _KeyPress()
+
+    _ctrl_o(runner).handler(event)
+
+    assert event.repaints == 1
+
+
+def test_the_prompt_gets_a_toolbar_it_reads_when_it_draws() -> None:
+    """A callable, not a snapshot: the pane opens while the prompt is running."""
+    toolbars: list[object] = []
+
+    class FakeSession:
+        def prompt(self, *args, **kwargs):
+            toolbar = kwargs["bottom_toolbar"]
+            toolbars.append(toolbar)
+            # The key is pressed while the prompt is up, then it repaints.
+            _ctrl_o(runner).handler(_KeyPress())
+            return "/exit"
+
+    runner = _runner_with_detail(
+        commands=[
+            _command("help"),
+            InteractiveCommandSpec(
+                name="exit", help="leave", handler=lambda context, line: True
+            ),
+        ],
+        session=FakeSession(),
+    )
+    runner._interactive_input = True
+
+    runner.cmdloop()
+
+    assert callable(toolbars[0])
+    assert DETAIL in toolbars[0]()
+
+
+def test_submitting_a_line_takes_the_detail_down() -> None:
+    """The pane describes the prompt it was opened at, not the next one."""
+    seen: list[str] = []
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.lines = ["/noop", "/exit"]
+
+        def prompt(self, *args, **kwargs):
+            toolbar = kwargs["bottom_toolbar"]
+            if not seen:
+                # Open the pane the way a person would: at the prompt.
+                _ctrl_o(runner).handler(_KeyPress())
+            seen.append(toolbar())
+            return self.lines.pop(0)
+
+    runner = _runner_with_detail(
+        commands=[
+            _command("noop"),
+            InteractiveCommandSpec(
+                name="exit", help="leave", handler=lambda context, line: True
+            ),
+        ],
+        session=FakeSession(),
+    )
+    runner._interactive_input = True
+
+    runner.cmdloop()
+
+    assert DETAIL in seen[0]
+    assert DETAIL not in seen[1]

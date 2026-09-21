@@ -97,11 +97,13 @@ def terminal_lines(raw: str, rows: int = 24, cols: int = 100) -> list[str]:
 
 
 def make_renderer(
-    terminal: bool = False, width: int = 100
+    terminal: bool = False, width: int = 100, height: int | None = None
 ) -> tuple[RichInteractiveRenderer, StringIO]:
     output = StringIO()
     renderer = RichInteractiveRenderer()
-    renderer.console = Console(file=output, force_terminal=terminal, width=width)
+    renderer.console = Console(
+        file=output, force_terminal=terminal, width=width, height=height
+    )
     return renderer, output
 
 
@@ -542,8 +544,8 @@ def test_cut_output_advertises_the_expand_key(
     assert "ctrl+o" in _frame_after_output(monkeypatch, long_output)
 
 
-def test_expand_last_prints_full_arguments_and_output() -> None:
-    renderer, output = make_renderer()
+def _finished_call(renderer: RichInteractiveRenderer, output: str = "") -> None:
+    """One finished bash call, with output long enough to be cut on the row."""
     renderer.start_response()
     renderer.render_event(
         {
@@ -559,25 +561,72 @@ def test_expand_last_prints_full_arguments_and_output() -> None:
             "type": "tool_output",
             "name": "bash",
             "tool_call_id": "c1",
-            "output": "\n".join(f"line {index}" for index in range(30)),
+            "output": output or "\n".join(f"line {index}" for index in range(30)),
         }
     )
     renderer.finish_response()
+
+
+def test_expansion_text_hands_back_what_the_row_withheld() -> None:
+    # Tall enough that nothing is cut: what gets dropped when it does not fit
+    # is the next test's subject.
+    renderer, output = make_renderer(height=200)
+    _finished_call(renderer)
     output.truncate(0)
     output.seek(0)
 
-    renderer.expand_last()
+    text = renderer.expansion_text()
 
-    expanded = output.getvalue()
-    assert "Bash(pwd)" in expanded
-    assert "commands" in expanded
+    assert "Bash(pwd)" in text
+    assert "commands" in text
     # The part the collapsed row withheld.
-    assert "line 29" in expanded
+    assert "line 29" in text
 
 
-def test_expand_last_before_any_call_says_so() -> None:
+def test_expansion_text_prints_nothing() -> None:
+    """Printing is what made the expansion one-way: the caller has to own it.
+
+    A renderer that writes its own detail to the terminal leaves whoever asked
+    for it no way to take it back.
+    """
+    renderer, output = make_renderer()
+    _finished_call(renderer)
+    output.truncate(0)
+    output.seek(0)
+
+    renderer.expansion_text()
+
+    assert output.getvalue() == ""
+
+
+def test_the_detail_names_the_key_that_closes_it() -> None:
+    """The row advertises ctrl+o; the pane has to say it works both ways."""
+    renderer, _ = make_renderer()
+    _finished_call(renderer)
+
+    assert "ctrl+o" in renderer.expansion_text().splitlines()[0]
+
+
+def test_expansion_text_before_any_call_says_so() -> None:
     renderer, output = make_renderer()
 
-    renderer.expand_last()
+    assert "Nothing to expand" in renderer.expansion_text()
+    assert output.getvalue() == ""
 
-    assert "Nothing to expand" in output.getvalue()
+
+def test_expansion_text_stops_at_the_window_and_says_what_it_dropped() -> None:
+    """The detail is drawn in the prompt's own layout now, so it has to fit.
+
+    On the scrollback length never mattered; an over-tall pane would push the
+    prompt off the screen instead.
+    """
+    output = StringIO()
+    renderer = RichInteractiveRenderer()
+    renderer.console = Console(file=output, force_terminal=False, width=100, height=10)
+    _finished_call(renderer)
+
+    lines = renderer.expansion_text().splitlines()
+
+    assert len(lines) <= renderer.console.height - renderer_module.LIVE_MARGIN
+    assert "line 29" not in "\n".join(lines)
+    assert "more lines" in lines[-1]
