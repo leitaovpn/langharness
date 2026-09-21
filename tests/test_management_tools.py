@@ -287,3 +287,12 @@ def test_coordinator_errors_map_to_error_dicts() -> None:
         {"package_id": "p", "contribution_id": "c", "scope": "agent"}
     )
     assert result == {"error": "Plugin is already installed: demo-plugin"}
+
+
+def test_management_provider_titles_every_tool_it_offers() -> None:
+    plugin = _plugin(FakeManager())
+
+    offered = {tool.name for tool in plugin.get_tools()}
+    declared = set(plugin.get_tool_presentations())
+
+    assert offered == declared, f"missing: {sorted(offered - declared)}"

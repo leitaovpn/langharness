@@ -42,5 +42,8 @@ class ToolPlugin:
                 tools.append(langchain_tool(function))
         return tools
 
+    def get_tool_presentations(self) -> dict[str, str]:
+        return {"add": "add({a}, {b})"}
+
     def get_plugin_info(self) -> dict[str, str]:
         return {"name": self._plugin_name, "version": self._plugin_version}
