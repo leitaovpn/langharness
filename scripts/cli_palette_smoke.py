@@ -14,6 +14,12 @@ from the byte stream, which is what a person would see.
 
 The run needs no network and no API key: the model provider points at a dead
 port, and the script only types at the prompt without submitting a message.
+
+Scope note: the same dead port means no message can be sent, so this script
+covers the command palette and nothing about the transcript. Tool call rows
+and ctrl+o need a model to emit a tool_call in the first place; they are
+covered by tests and were last verified end to end against a live provider by
+hand.
 """
 
 from __future__ import annotations
