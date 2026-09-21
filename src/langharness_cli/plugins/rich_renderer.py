@@ -80,14 +80,16 @@ class RichInteractiveRenderer:
         anywhere here -- the renderer has no business knowing what counts as
         news, and an empty list is the common case.
         """
-        identity = Panel(
-            Group(Text(APP_LOGO, style="cyan"), Text(""), Text(text, style="dim")),
-            title="[bold cyan]langharness[/bold cyan]",
-            border_style="cyan",
-        )
+        body = Group(Text(APP_LOGO, style="cyan"), Text(""), Text(text, style="dim"))
+        title = "[bold cyan]langharness[/bold cyan]"
         if not highlights:
-            self.console.print(identity)
+            # Nothing to sit beside, so keep the compact box the shell has
+            # always shown rather than stretching to the terminal width.
+            self.console.print(
+                Panel.fit(body, title=title, border_style="cyan")
+            )
             return
+        identity = Panel(body, title=title, border_style="cyan")
         news = Panel(
             Group(*(Text(f"· {item}") for item in highlights)),
             title="[bold cyan]What's new[/bold cyan]",

@@ -144,6 +144,23 @@ class Screen:
             self.grid[self.row][column] = " "
             self.cell_sgr[self.row][column] = ""
 
+    def _erase_characters(self, count: int, *, shift: bool) -> None:
+        """ECH (``CSI X``) blanks cells in place; DCH (``CSI P``) pulls the
+        rest of the line left. prompt_toolkit uses these to trim a line that
+        got shorter, so ignoring them leaves the tail of the previous text on
+        screen -- a capture artefact that reads like a product bug."""
+        row = self.grid[self.row]
+        end = min(self.col + count, self.cols)
+        if shift:
+            row[self.col :] = row[end:] + [" "] * (end - self.col)
+            self.cell_sgr[self.row][self.col :] = (
+                self.cell_sgr[self.row][end:] + [""] * (end - self.col)
+            )
+            return
+        for column in range(self.col, end):
+            row[column] = " "
+            self.cell_sgr[self.row][column] = ""
+
     def _erase_display(self, mode: str) -> None:
         if mode != "2":
             return
@@ -213,6 +230,9 @@ class Screen:
             self._erase_line(params or "0")
         elif final == "J":
             self._erase_display(params or "0")
+        elif final in "XP":
+            count = int(params) if params.isdigit() else 1
+            self._erase_characters(count, shift=final == "P")
         elif final == "m":
             self.sgr = params or "0"
         # Private modes ('h'/'l') and the rest do not move ink.
