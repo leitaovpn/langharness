@@ -702,5 +702,17 @@ class PluginAgentLoop:
         return {
             "llm": llm_info,
             "tools": [getattr(tool, "name", str(tool)) for tool in self._collect_tools()],
+            "tool_headlines": self._collect_tool_headlines(),
             "middleware": [middleware.name for middleware in self._collect_middlewares()],
         }
+
+    def _collect_tool_headlines(self) -> dict[str, str]:
+        """Template per tool name, for clients that render calls.
+
+        Names are kept in a separate key rather than folded into ``tools`` so
+        that consumers reading the plain name list keep working.
+        """
+        headlines: dict[str, str] = {}
+        for provider in self._effective(self._tool_providers):
+            headlines.update(provider.get_tool_presentations())
+        return headlines
