@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time as time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,6 +12,7 @@ from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.table import Table
 from rich.text import Text
 
 from langharness_cli.common.i18n import tr
@@ -24,6 +25,17 @@ ARG_SUMMARY_MAX = 60
 # otherwise rich cannot move the cursor back to the top and each re-render
 # duplicates the whole frame into the scrollback.
 LIVE_MARGIN = 3
+#: Below this width the two halves of the welcome banner are stacked instead
+#: of placed side by side; the highlights column gets unreadable otherwise.
+BANNER_MIN_WIDTH = 80
+
+APP_LOGO = (
+    " ██╗     ██╗  ██╗\n"
+    " ██║     ██║  ██║\n"
+    " ██║     ███████║\n"
+    " ███████╗██╔══██║\n"
+    " ╚══════╝╚═╝  ╚═╝"
+)
 
 
 @dataclass
@@ -61,10 +73,35 @@ class RichInteractiveRenderer:
         self._last_frame = float("-inf")
         self._spinner_idx = 0
 
-    def show_welcome(self, text: str) -> None:
-        self.console.print(
-            Panel.fit(text, title="[bold cyan]langharness[/bold cyan]", border_style="cyan")
+    def show_welcome(self, text: str, *, highlights: Sequence[str] = ()) -> None:
+        """Welcome screen: identity on the left, what's new on the right.
+
+        ``highlights`` is supplied by the caller rather than read from
+        anywhere here -- the renderer has no business knowing what counts as
+        news, and an empty list is the common case.
+        """
+        identity = Panel(
+            Group(Text(APP_LOGO, style="cyan"), Text(""), Text(text, style="dim")),
+            title="[bold cyan]langharness[/bold cyan]",
+            border_style="cyan",
         )
+        if not highlights:
+            self.console.print(identity)
+            return
+        news = Panel(
+            Group(*(Text(f"· {item}") for item in highlights)),
+            title="[bold cyan]What's new[/bold cyan]",
+            border_style="cyan",
+        )
+        if self.console.width < BANNER_MIN_WIDTH:
+            self.console.print(identity)
+            self.console.print(news)
+            return
+        grid = Table.grid(padding=(0, 2))
+        grid.add_column()
+        grid.add_column(ratio=1)
+        grid.add_row(identity, news)
+        self.console.print(grid)
 
     def set_model(self, name: str) -> None:
         self._model = name

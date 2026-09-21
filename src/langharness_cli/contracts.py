@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
@@ -60,7 +60,7 @@ class CLICommandProvider(Protocol):
 @service_contract(SPEC_CLI_RENDERER)
 @runtime_checkable
 class InteractiveRenderer(Protocol):
-    def show_welcome(self, text: str) -> None: ...
+    def show_welcome(self, text: str, *, highlights: Sequence[str] = ()) -> None: ...
 
     def start_response(self) -> None: ...
 

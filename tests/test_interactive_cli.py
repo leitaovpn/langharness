@@ -6,14 +6,19 @@
 from __future__ import annotations
 
 import json
+import sys
+from types import SimpleNamespace
 
 import pytest
 from prompt_toolkit.completion import CompleteEvent
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import fragment_list_to_text
+from prompt_toolkit.shortcuts import CompleteStyle
 
+import langharness_cli.common.interactive as interactive_module
 import langharness_cli.plugins.commands.health as health_module
 from langharness_cli.common.interactive import InteractiveCLIRunner
+from langharness_cli.common.theme import SELECTED_BACKGROUND
 from langharness_cli.contracts import InteractiveCommandSpec
 from langharness_cli.plugins.commands.health import HealthCommandPlugin
 from langharness_cli.plugins.commands.shell import ShellCommandPlugin
@@ -740,3 +745,110 @@ def test_approval_resume_response_events_are_rendered(monkeypatch) -> None:
         "decisions": [{"type": "approve"}]
     }
     assert {"type": "assistant", "content": "done"} in renderer.events
+
+
+# --- command palette ------------------------------------------------------
+
+
+def _command(name: str, help_text: str = "does a thing") -> InteractiveCommandSpec:
+    return InteractiveCommandSpec(
+        name=name, help=help_text, handler=lambda context, line: False
+    )
+
+
+def test_prompt_completion_ranks_subsequence_matches() -> None:
+    runner = InteractiveCLIRunner(
+        base_url="http://api",
+        token="secret",
+        commands=[_command("session"), _command("scroll-speed"), _command("help")],
+    )
+
+    completions = list(
+        runner._command_completer().get_completions(
+            Document("/ss", cursor_position=3), CompleteEvent()
+        )
+    )
+
+    assert [completion.text for completion in completions] == [
+        "/session",
+        "/scroll-speed",
+    ]
+
+
+def test_prompt_completion_leaves_plain_messages_alone() -> None:
+    runner = InteractiveCLIRunner(
+        base_url="http://api", token="secret", commands=[_command("help")]
+    )
+
+    completions = list(
+        runner._command_completer().get_completions(
+            Document("write a /he", cursor_position=11), CompleteEvent()
+        )
+    )
+
+    assert completions == []
+
+
+def test_model_argument_completes_from_configured_providers() -> None:
+    runner = InteractiveCLIRunner(
+        base_url="http://api",
+        token="secret",
+        commands=[_command("model")],
+        configs=SimpleNamespace(list_providers=lambda: ["demo", "prod"]),
+    )
+
+    completions = list(
+        runner._command_completer().get_completions(
+            Document("/model ", cursor_position=7), CompleteEvent()
+        )
+    )
+
+    assert [completion.text for completion in completions] == ["demo", "prod"]
+
+
+def test_prompt_session_uses_the_shared_palette_style(monkeypatch) -> None:
+    captured: dict = {}
+
+    class RecordingSession:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(interactive_module, "PromptSession", RecordingSession)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    InteractiveCLIRunner(
+        base_url="http://api", token="secret", commands=[_command("help")]
+    )
+
+    attrs = captured["style"].get_attrs_for_style_str(
+        "class:completion-menu.completion.current"
+    )
+
+    assert attrs.bgcolor == SELECTED_BACKGROUND.removeprefix("bg:#")
+    assert attrs.reverse is False
+
+
+def test_cmdloop_asks_for_a_single_column_menu() -> None:
+    prompts = []
+
+    class FakeSession:
+        def prompt(self, *args, **kwargs):
+            prompts.append((args, kwargs))
+            return "/exit"
+
+    runner = InteractiveCLIRunner(
+        base_url="http://api",
+        token="secret",
+        # cmdloop only stops when a command's handler returns True, so an
+        # exit that actually exits is required or this spins forever.
+        commands=[
+            _command("help"),
+            InteractiveCommandSpec(
+                name="exit", help="leave", handler=lambda context, line: True
+            ),
+        ],
+        session=FakeSession(),
+    )
+    runner._interactive_input = True
+    runner.cmdloop()
+
+    assert prompts[0][1]["complete_style"] == CompleteStyle.COLUMN

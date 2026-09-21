@@ -96,10 +96,12 @@ def terminal_lines(raw: str, rows: int = 24, cols: int = 100) -> list[str]:
     return emulator.lines()
 
 
-def make_renderer(terminal: bool = False) -> tuple[RichInteractiveRenderer, StringIO]:
+def make_renderer(
+    terminal: bool = False, width: int = 100
+) -> tuple[RichInteractiveRenderer, StringIO]:
     output = StringIO()
     renderer = RichInteractiveRenderer()
-    renderer.console = Console(file=output, force_terminal=terminal, width=100)
+    renderer.console = Console(file=output, force_terminal=terminal, width=width)
     return renderer, output
 
 
@@ -422,3 +424,48 @@ def test_overflow_commit_splits_unbroken_long_line() -> None:
     assert isinstance(head, str)
     assert len(head) < len(long_text)
     assert "x" in render_plain(committed[0])
+
+
+# --- welcome banner -------------------------------------------------------
+
+
+def test_welcome_banner_places_highlights_beside_the_identity() -> None:
+    renderer, output = make_renderer(width=110)
+
+    renderer.show_welcome("Type a message", highlights=["Added /goal"])
+
+    lines = output.getvalue().splitlines()
+    # Side by side means the two panels share their opening row, so both
+    # titles land on one line.
+    news_row = next(line for line in lines if "What's new" in line)
+    assert "langharness" in news_row
+    assert any("Added /goal" in line for line in lines)
+
+
+def test_welcome_banner_stacks_when_the_terminal_is_narrow() -> None:
+    renderer, output = make_renderer(width=60)
+
+    renderer.show_welcome("Type a message", highlights=["Added /goal"])
+
+    lines = output.getvalue().splitlines()
+    news_row = next(i for i, line in enumerate(lines) if "What's new" in line)
+    identity_row = next(i for i, line in enumerate(lines) if "langharness" in line)
+    assert news_row > identity_row
+
+
+def test_welcome_banner_titles_the_highlights_panel() -> None:
+    renderer, output = make_renderer(width=110)
+
+    renderer.show_welcome("Type a message", highlights=["Added /goal"])
+
+    assert "What's new" in output.getvalue()
+
+
+def test_welcome_banner_omits_the_highlights_panel_when_empty() -> None:
+    renderer, output = make_renderer(width=110)
+
+    renderer.show_welcome("Type a message")
+
+    rendered = output.getvalue()
+    assert "Type a message" in rendered
+    assert "What's new" not in rendered

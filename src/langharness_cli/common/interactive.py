@@ -12,13 +12,14 @@ from typing import Any
 import httpx
 from prompt_toolkit import PromptSession
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
-from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.completion import Completer
 from prompt_toolkit.history import FileHistory, History, InMemoryHistory
 from prompt_toolkit.shortcuts import CompleteStyle
-from prompt_toolkit.styles import Style
 
+from langharness_cli.common.completion import ArgumentSource, PaletteCompleter
 from langharness_cli.common.i18n import tr
 from langharness_cli.common.session import DEFAULT_AGENT_ID, DEFAULT_USER_ID
+from langharness_cli.common.theme import build_palette_style
 from langharness_cli.contracts import InteractiveCommandSpec, InteractiveRenderer
 from langharness_cli.plugins.rich_renderer import RichInteractiveRenderer
 
@@ -76,12 +77,7 @@ class InteractiveCLIRunner:
             self._session = PromptSession(
                 history=history,
                 auto_suggest=AutoSuggestFromHistory(),
-                style=Style.from_dict(
-                    {
-                        "prompt": "bold ansicyan",
-                        "bottom-toolbar": "bg:#222222 #aaaaaa",
-                    }
-                ),
+                style=build_palette_style(),
             )
 
     def cmdloop(self, intro: str | None = None) -> None:
@@ -96,7 +92,7 @@ class InteractiveCLIRunner:
                     self._session.prompt(
                         [("class:prompt", self.prompt)],
                         completer=self._command_completer(),
-                        complete_style=CompleteStyle.MULTI_COLUMN,
+                        complete_style=CompleteStyle.COLUMN,
                         bottom_toolbar=toolbar,
                     )
                     if self._interactive_input and self._session is not None
@@ -111,14 +107,20 @@ class InteractiveCLIRunner:
             if self.onecmd(line):
                 return
 
-    def _command_completer(self) -> WordCompleter:
-        return WordCompleter(
-            [f"/{name}" for name in sorted(self.commands)],
-            meta_dict={
-                f"/{name}": command.help for name, command in self.commands.items()
-            },
-            sentence=True,
-        )
+    def _command_completer(self) -> Completer:
+        return PaletteCompleter(self.commands, self._argument_sources())
+
+    def _argument_sources(self) -> Mapping[str, ArgumentSource]:
+        """Values the palette can offer for a command's first argument.
+
+        Sources answer from local state only. Commands whose arguments live
+        behind the API are left out rather than made to block the keystroke.
+        """
+        return {"model": self._provider_source}
+
+    def _provider_source(self, prefix: str) -> list[str]:
+        del prefix  # Provider names are few enough to list unfiltered.
+        return self.list_providers()
 
     def do_stream(self, line: str) -> None:
         self.renderer.start_response()
