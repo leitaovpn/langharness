@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
@@ -27,6 +27,10 @@ class InteractiveCommandSpec:
     name: str
     help: str
     handler: Callable[[InteractiveCommandContext, str], bool | None]
+    #: Optional. Declared by the command that owns the grammar rather than
+    #: by the shell, so a command's actions and their completion cannot drift
+    #: apart the way a shared lookup table would let them.
+    complete: ArgumentCompleter | None = None
 
 
 @runtime_checkable
@@ -45,6 +49,15 @@ class InteractiveCommandContext(Protocol):
     def switch_provider(self, name: str) -> bool: ...
 
     def refresh_status(self) -> None: ...
+
+
+#: Supplies candidates for one argument slot of an interactive command.
+#: Receives the command's context, the argument words already typed before
+#: the slot, and the word being typed. An implementation that cannot answer
+#: a slot returns nothing rather than guessing.
+ArgumentCompleter = Callable[
+    ["InteractiveCommandContext", Sequence[str], str], Iterable[str]
+]
 
 
 @service_contract(SPEC_CLI_COMMAND)

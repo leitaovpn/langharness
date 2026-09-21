@@ -6,6 +6,7 @@ import json
 import os
 import sys
 from collections.abc import Iterable, Mapping
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -111,16 +112,18 @@ class InteractiveCLIRunner:
         return PaletteCompleter(self.commands, self._argument_sources())
 
     def _argument_sources(self) -> Mapping[str, ArgumentSource]:
-        """Values the palette can offer for a command's first argument.
+        """Completers the command plugins declared, bound to this runner.
 
-        Sources answer from local state only. Commands whose arguments live
-        behind the API are left out rather than made to block the keystroke.
+        The shell owns no grammar of its own: each command hands in a callable
+        next to the handler that consumes the same arguments. Sources answer
+        from local state only, so a candidate never blocks the keystroke on a
+        server round trip.
         """
-        return {"model": self._provider_source}
-
-    def _provider_source(self, prefix: str) -> list[str]:
-        del prefix  # Provider names are few enough to list unfiltered.
-        return self.list_providers()
+        return {
+            name: partial(spec.complete, self)
+            for name, spec in self.commands.items()
+            if spec.complete is not None
+        }
 
     def do_stream(self, line: str) -> None:
         self.renderer.start_response()

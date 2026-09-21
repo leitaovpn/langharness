@@ -21,6 +21,7 @@ from langharness_cli.common.interactive import InteractiveCLIRunner
 from langharness_cli.common.theme import SELECTED_BACKGROUND
 from langharness_cli.contracts import InteractiveCommandSpec
 from langharness_cli.plugins.commands.health import HealthCommandPlugin
+from langharness_cli.plugins.commands.model import ModelCommandPlugin
 from langharness_cli.plugins.commands.shell import ShellCommandPlugin
 from langharness_cli.plugins.rich_renderer import RichInteractiveRenderer
 
@@ -793,7 +794,7 @@ def test_model_argument_completes_from_configured_providers() -> None:
     runner = InteractiveCLIRunner(
         base_url="http://api",
         token="secret",
-        commands=[_command("model")],
+        commands=ModelCommandPlugin().get_interactive_commands(),
         configs=SimpleNamespace(list_providers=lambda: ["demo", "prod"]),
     )
 
@@ -852,3 +853,56 @@ def test_cmdloop_asks_for_a_single_column_menu() -> None:
     runner.cmdloop()
 
     assert prompts[0][1]["complete_style"] == CompleteStyle.COLUMN
+
+
+def _completions(runner, text: str) -> list[str]:
+    return [
+        completion.text
+        for completion in runner._command_completer().get_completions(
+            Document(text, cursor_position=len(text)), CompleteEvent()
+        )
+    ]
+
+
+def test_a_command_can_declare_its_own_argument_completion() -> None:
+    def complete(context, words, prefix):
+        # Reading the context proves the spec's completer is handed one.
+        return ["alpha", "beta"] if context.user_id == "local_user" else []
+
+    command = InteractiveCommandSpec(
+        name="demo", help="d", handler=lambda context, line: False, complete=complete
+    )
+    runner = InteractiveCLIRunner(
+        base_url="http://api", token="secret", commands=[command]
+    )
+
+    assert _completions(runner, "/demo ") == ["alpha", "beta"]
+
+
+def test_a_declared_completer_sees_the_deeper_slots() -> None:
+    seen: list[list[str]] = []
+
+    def complete(context, words, prefix):
+        seen.append(list(words))
+        return ["set"] if words == ["runtime"] else []
+
+    command = InteractiveCommandSpec(
+        name="plugins", help="p", handler=lambda context, line: False, complete=complete
+    )
+    runner = InteractiveCLIRunner(
+        base_url="http://api", token="secret", commands=[command]
+    )
+
+    assert _completions(runner, "/plugins runtime s") == ["set"]
+    assert seen == [["runtime"]]
+
+
+def test_model_declares_its_own_completion_from_the_runner_providers() -> None:
+    runner = InteractiveCLIRunner(
+        base_url="http://api",
+        token="secret",
+        commands=ModelCommandPlugin().get_interactive_commands(),
+        configs=SimpleNamespace(list_providers=lambda: ["demo"]),
+    )
+
+    assert _completions(runner, "/model de") == ["demo"]
