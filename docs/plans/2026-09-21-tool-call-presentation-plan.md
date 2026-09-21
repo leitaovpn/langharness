@@ -397,6 +397,26 @@ Expected: PASS
         return {"add": "add({a}, {b})"}
 ```
 
+- [ ] **Step 8b: 补上第 5 个实现（demo 插件）**
+
+`grep -rn "@Provides(ToolProvider)" src/ examples/` 会找到五个实现，不是四个。
+`examples/plugin_demo/plugins/calculator_tool.py` 带
+`@Instantiate("calculator-tool")` —— 加载该 demo 包时组件会自动实例化并走
+`validate()`，缺方法报 `MISSING_METHOD`。测试套件目前不加载 examples/，所以
+不会变红，但会留下一个坏掉的示例：
+
+在 `examples/plugin_demo/plugins/calculator_tool.py` 的 `get_plugin_info` 之前加：
+
+```python
+    def get_tool_presentations(self) -> dict[str, str]:
+        return {"add": "add({a}, {b})"}
+```
+
+- [ ] **Step 8c: 确认五个实现都齐了**
+
+Run: `grep -rn "@Provides(ToolProvider)" src/ examples/ | wc -l` → 应为 5
+Run: `grep -rn "def get_tool_presentations" src/ examples/ | wc -l` → 应为 5
+
 - [ ] **Step 9: 运行全部测试并检查门禁**
 
 Run:

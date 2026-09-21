@@ -181,8 +181,9 @@ def test_plain_path_renders_tool_rows_with_duration_and_size(
     )
     renderer.finish_response()
     rendered = output.getvalue()
-    assert "+ bash {'commands': 'pwd'}" in rendered
-    assert "✓ bash (250ms · 2.3KB)" in rendered
+    assert "● bash" in rendered
+    assert "⎿" in rendered
+    assert "f" * 50 in rendered
 
 
 def test_plain_path_matches_output_to_running_tool_without_id(
@@ -195,8 +196,8 @@ def test_plain_path_matches_output_to_running_tool_without_id(
     renderer.render_event({"type": "tool_output", "name": "bash", "output": "/workspace"})
     renderer.finish_response()
     rendered = output.getvalue()
-    assert "+ bash {'commands': 'pwd'}" in rendered
-    assert "✓ bash (10ms · 10B)" in rendered
+    assert "● bash" in rendered
+    assert "⎿ /workspace" in rendered
 
 
 def test_plain_path_marks_error_outputs(
@@ -212,7 +213,8 @@ def test_plain_path_marks_error_outputs(
         {"type": "tool_output", "name": "bash", "tool_call_id": "c1", "output": "Error: boom"}
     )
     renderer.finish_response()
-    assert "✗ bash (error)" in output.getvalue()
+    assert "● bash" in output.getvalue()
+    assert "⎿ Error: boom" in output.getvalue()
 
 
 def test_unknown_events_are_ignored() -> None:
@@ -268,33 +270,33 @@ def test_status_line_shows_running_tool() -> None:
     renderer.render_event(
         {"type": "tool_call", "name": "bash", "tool_call_id": "c1", "args": {"commands": "pwd"}}
     )
-    assert renderer._status_line() == "⠋ bash {'commands': 'pwd'} · m1"
+    assert renderer._status_line() == "⠋ bash · m1"
 
 
 def test_tool_lines_render_running_done_error_states() -> None:
     renderer, _ = make_renderer()
-    running = renderer_module._ToolRun(name="bash", args_summary="pwd", started=0.0)
+    running = renderer_module._ToolRun(
+        name="bash", headline="Bash(pwd)", args={"commands": "pwd"}, started=0.0
+    )
     running_line = render_plain(renderer._tool_line(running))
-    assert "bash" in running_line
-    assert "pwd" in running_line
+    assert "Bash(pwd)" in running_line
     done = renderer_module._ToolRun(
         name="bash",
-        args_summary="",
+        headline="Bash(pwd)",
+        args={"commands": "pwd"},
         started=0.0,
         status="done",
         duration_ms=123,
         output_bytes=2048,
     )
-    assert "✓ bash (123ms · 2.0KB)" in render_plain(renderer._tool_line(done))
-    failed = renderer_module._ToolRun(name="bash", args_summary="", started=0.0, status="error")
-    assert "✗ bash (error)" in render_plain(renderer._tool_line(failed))
-
-
-def test_tool_args_are_summarized_to_one_line() -> None:
-    renderer, _ = make_renderer()
-    long_summary = " ".join(str({"a": "x" * 200}).split())
-    assert renderer._summarize_args({"a": "x" * 200}) == long_summary[:60] + "…"
-    assert renderer._summarize_args({"a": "short"}) == "{'a': 'short'}"
+    # Duration and size moved to the ctrl+o expansion, so the row is the
+    # headline alone.
+    assert "● Bash(pwd)" in render_plain(renderer._tool_line(done))
+    assert "123ms" not in render_plain(renderer._tool_line(done))
+    failed = renderer_module._ToolRun(
+        name="bash", headline="Bash(pwd)", args={}, started=0.0, status="error"
+    )
+    assert "● Bash(pwd) (error)" in render_plain(renderer._tool_line(failed))
 
 
 def test_token_and_size_formatting() -> None:
@@ -394,7 +396,7 @@ def test_overflow_commit_moves_tool_row_out_of_the_frame() -> None:
     renderer.start_response()
     renderer._segments = [
         renderer_module._ToolRun(
-            name="bash", args_summary="pwd", started=0.0, status="done",
+            name="bash", headline="Bash(pwd)", args={}, started=0.0, status="done",
             duration_ms=5, output_bytes=10,
         ),
         "tail\n" * 10,
@@ -405,7 +407,10 @@ def test_overflow_commit_moves_tool_row_out_of_the_frame() -> None:
     assert all(
         not isinstance(segment, renderer_module._ToolRun) for segment in renderer._segments
     )
-    assert "bash" in render_plain(committed[0])
+    assert "Bash(pwd)" in render_plain(committed[0])
+    # A finished run commits its output line too, or the committed row would
+    # be a headline with no result under it.
+    assert any("⎿" in render_plain(chunk) for chunk in committed)
 
 
 def test_overflow_commit_splits_unbroken_long_line() -> None:
@@ -469,3 +474,69 @@ def test_welcome_banner_omits_the_highlights_panel_when_empty() -> None:
     rendered = output.getvalue()
     assert "Type a message" in rendered
     assert "What's new" not in rendered
+
+
+# --- tool call rows -------------------------------------------------------
+
+
+def test_plain_path_renders_a_call_from_its_headline() -> None:
+    renderer, output = make_renderer()
+    renderer.start_response()
+    renderer.render_event(
+        {
+            "type": "tool_call",
+            "name": "bash",
+            "tool_call_id": "c1",
+            "args": {"commands": "pwd"},
+            "headline": "Bash(pwd)",
+        }
+    )
+    renderer.render_event(
+        {"type": "tool_output", "name": "bash", "tool_call_id": "c1", "output": "/work"}
+    )
+    renderer.finish_response()
+    rendered = output.getvalue()
+
+    assert "● Bash(pwd)" in rendered
+    assert "⎿ /work" in rendered
+
+
+def test_a_call_without_a_headline_falls_back_to_the_bare_name() -> None:
+    renderer, output = make_renderer()
+    renderer.start_response()
+    renderer.render_event(
+        {"type": "tool_call", "name": "mystery", "tool_call_id": "c1", "args": {"x": 1}}
+    )
+    renderer.finish_response()
+
+    assert "● mystery" in output.getvalue()
+    assert "{'x': 1}" not in output.getvalue()
+
+
+def _frame_after_output(
+    monkeypatch: pytest.MonkeyPatch, output: str
+) -> str:
+    renderer, _ = make_renderer(terminal=True)
+    monkeypatch.setattr(renderer, "_refresh", lambda force=False: None)
+    renderer.start_response()
+    renderer.render_event(
+        {"type": "tool_call", "name": "bash", "tool_call_id": "c1", "args": {}}
+    )
+    renderer.render_event(
+        {"type": "tool_output", "name": "bash", "tool_call_id": "c1", "output": output}
+    )
+    return render_plain(renderer._build_frame())
+
+
+def test_the_expand_hint_is_absent_when_nothing_was_cut(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert "ctrl+o" not in _frame_after_output(monkeypatch, "short")
+
+
+def test_cut_output_advertises_the_expand_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    long_output = "\n".join(f"line {index}" for index in range(30))
+
+    assert "ctrl+o" in _frame_after_output(monkeypatch, long_output)

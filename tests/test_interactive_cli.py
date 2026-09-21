@@ -108,9 +108,8 @@ def test_interactive_runner_stream_request(
     )
     runner.do_stream("hello")
     output = capsys.readouterr().out
-    assert "+ bash {'commands': 'pwd'}" in output
-    assert "✓ bash (" in output
-    assert "10B" in output
+    assert "● bash" in output
+    assert "⎿ /workspace" in output
     assert "done" in output
     assert captured["json"] == {
         "input": "hello",
