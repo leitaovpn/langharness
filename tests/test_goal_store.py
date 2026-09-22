@@ -1,7 +1,7 @@
 
 """Tests for the SQLite goal store."""
 # mypy: ignore-errors
-# pyright: reportOptionalMemberAccess=false
+# pyright: reportOptionalMemberAccess=false, reportArgumentType=false
 
 from __future__ import annotations
 
