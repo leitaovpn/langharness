@@ -7,8 +7,6 @@ a gate. Commands are argv arrays executed without a shell.
 
 from __future__ import annotations
 
-import subprocess
-import time
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -32,6 +30,7 @@ from langharness_core.contracts import (
     WorkspaceProvider,
     WorkspaceStateProvider,
 )
+from langharness_core.plugins.exec.runner import run_command
 from langharness_plugin.scoped_dependencies import ScopedDependencies
 from langharness_plugin.validation import ContractGuard
 
@@ -132,30 +131,23 @@ class ProjectVerifier:
         return [[str(part) for part in item] for item in commands if item]
 
     def _run(self, command: list[str]) -> VerificationCheck:
-        started = time.monotonic()
-        try:
-            completed = subprocess.run(
-                command,
-                cwd=self._workspace.get_workspace() if self._workspace else None,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=float(self._timeout_seconds),
-            )
-            output = completed.stdout + completed.stderr
-            exit_code = completed.returncode
-        except subprocess.TimeoutExpired:
-            output = f"command timed out after {self._timeout_seconds}s"
-            exit_code = -1
-        except OSError as exc:
-            output = f"command could not be run: {exc}"
-            exit_code = -1
-        duration_ms = int((time.monotonic() - started) * 1000)
-        self._last_output = output[:MAX_OUTPUT_BYTES]
+        """Run one gate through the shared executor.
+
+        ``env`` is deliberately left unset so the gate inherits the host
+        environment: these are the project's own commands and restricting them
+        to the agent's allowlist would break real gates (``make``, compilers,
+        CI variables) for no security gain — the host configured them.
+        """
+        outcome = run_command(
+            command,
+            cwd=self._workspace.get_workspace() if self._workspace else ".",
+            timeout_seconds=float(self._timeout_seconds),
+        )
+        self._last_output = outcome.output[:MAX_OUTPUT_BYTES]
         return VerificationCheck(
             name=" ".join(command),
             command=tuple(command),
-            exit_code=exit_code,
-            stdout_digest=digest(output),
-            duration_ms=duration_ms,
+            exit_code=outcome.exit_code,
+            stdout_digest=digest(outcome.output),
+            duration_ms=outcome.duration_ms,
         )
