@@ -25,7 +25,9 @@ import time
 from websockets.sync.client import connect
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
-#: The test uses 0.3s. Override with REPRO_GRACE to see the window close/open.
+#: The window the test used to run with, and the one that failed: it was spent
+#: before the test could attach. The test now runs at 2.0s (see ``GRACE`` in
+#: tests/test_server_lifecycle_e2e.py); override with REPRO_GRACE to compare.
 GRACE = float(os.environ.get("REPRO_GRACE", "0.3"))
 
 
