@@ -1839,7 +1839,9 @@ class PatchError(Exception):
     """A patch that cannot be parsed, or cannot be applied to this content."""
 
     def __init__(self, code: PatchErrorCode, message: str) -> None:
-        self.code = code
+        # Annotated: Pyright widens an unannotated attribute to ``str``, which
+        # then does not satisfy ``tool_error``'s Literal parameter.
+        self.code: PatchErrorCode = code
         self.message = message
         super().__init__(message)
 
@@ -2536,7 +2538,12 @@ class NoArgs(BaseModel):
 
 
 def _git(root: Path, *arguments: str) -> str | None:
-    """Run one git query in the workspace; None when git or the repo is absent."""
+    """Run one git query in the workspace; None when git or the repo is absent.
+
+    Only the trailing newline is removed. ``str.strip()`` would eat the leading
+    space of a porcelain line's two-letter status, shifting the path by one
+    character and misattributing the very change this feeds.
+    """
     try:
         completed = subprocess.run(
             ["git", *arguments],
@@ -2549,7 +2556,7 @@ def _git(root: Path, *arguments: str) -> str | None:
         return None
     if completed.returncode != 0:
         return None
-    return completed.stdout.strip()
+    return completed.stdout.rstrip("\n")
 ```
 
 （在文件顶部加 `import subprocess`。）
