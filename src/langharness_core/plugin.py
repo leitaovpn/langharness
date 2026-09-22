@@ -20,6 +20,7 @@ from langharness_core.contracts import (
     SPEC_LLM,
     SPEC_MIDDLEWARE,
     SPEC_NAME,
+    SPEC_PROMPT_SECTION,
     SPEC_RESPONSE_FORMAT,
     SPEC_SESSION_INDEX,
     SPEC_STATE_SCHEMA,
@@ -54,6 +55,11 @@ AGENT_PLUGIN_CATALOG: dict[str, tuple[str, str, str]] = {
         "langharness_core.plugins.workspace.root",
         "workspace-root-plugin-factory",
         SPEC_WORKSPACE,
+    ),
+    "repository-instructions": (
+        "langharness_core.plugins.instructions.repository",
+        "repository-instructions-plugin-factory",
+        SPEC_PROMPT_SECTION,
     ),
 }
 
@@ -183,6 +189,13 @@ AGENT_PLUGIN_DESCRIPTIONS: dict[str, str] = {
         "agent.plugin.workspace. Properties: plugin.workspace.root_dir, "
         "plugin.agent_id. Requires a restart for property changes. Uninstall "
         "when the agent is removed."
+    ),
+    "repository-instructions": (
+        "Contributes AGENTS.md and compatible instruction files from the "
+        "workspace root down to the directory being edited. Implements "
+        "agent.plugin.prompt_section. Properties: plugin.instructions.include, "
+        "plugin.instructions.budget_bytes, plugin.agent_id. Requires a restart "
+        "for property changes. Uninstall when the agent is removed."
     ),
     "agent-loop": (
         "Runs the agent loop for one agent scope. Implements "
@@ -460,6 +473,11 @@ def builtin_package() -> PluginPackage:
                 "workspace-template",
                 "agent",
                 agent_plugin_template_descriptor("workspace"),
+            ),
+            PluginContribution(
+                "repository-instructions-template",
+                "agent",
+                agent_plugin_template_descriptor("repository-instructions"),
             ),
             PluginContribution(
                 "agent-loop-template", "agent", agent_loop_template_descriptor()
