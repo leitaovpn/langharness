@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Callable
 from types import SimpleNamespace
 
 import httpx
@@ -1121,7 +1122,7 @@ def test_ctrl_o_asks_prompt_toolkit_to_repaint() -> None:
 
 def test_the_prompt_gets_a_toolbar_it_reads_when_it_draws() -> None:
     """A callable, not a snapshot: the pane opens while the prompt is running."""
-    toolbars: list[object] = []
+    toolbars: list[Callable[[], str]] = []
 
     class FakeSession:
         def prompt(self, *args, **kwargs):
