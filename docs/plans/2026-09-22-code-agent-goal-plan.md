@@ -1674,7 +1674,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from langharness_core.contracts import GoalProvider, ToolProvider, VerificationProvider
+from langharness_core.contracts import ToolProvider
 from langharness_core.plugins.goals.sqlite import SQLiteGoalPlugin
 from langharness_core.plugins.goals.tools import GoalToolsPlugin
 from langharness_core.plugins.verifier.project import ProjectVerifier
@@ -1693,8 +1693,9 @@ def build(tmp_path: Path, *, failing: bool = False) -> GoalToolsPlugin:
     verifier = ProjectVerifier()
     verifier._workspace = root
     verifier._state = state
+    exit_code = 1 if failing else 0
     verifier._commands = [
-        ["python3", "-c", "import sys; sys.exit(1 if %r else 0)" % failing]
+        ["python3", "-c", f"import sys; sys.exit({exit_code})"]
     ]
     instance._goals = goal_store
     instance._verifier = verifier
@@ -2104,10 +2105,19 @@ class GoalToolsPlugin:
             if previous != text:
                 break
             streak += 1
-        if streak + 1 < BLOCKER_THRESHOLD:
+        attempts = streak + 1
+        if attempts < BLOCKER_THRESHOLD:
+            # The attempt has to be recorded or the streak can never grow and
+            # the goal could never be given up on. Status stays where it is.
+            try:
+                self._goals.update_goal(
+                    goal.id, expected_revision=goal.revision, blocker=text
+                )
+            except GoalConflictError as exc:
+                return tool_error("goal_revision_mismatch", str(exc), retryable=True)
             return tool_error(
                 "blocker_not_established",
-                f"blocker recorded {streak + 1} of {BLOCKER_THRESHOLD} times; "
+                f"blocker recorded {attempts} of {BLOCKER_THRESHOLD} times; "
                 "try a different approach before giving up, and describe what "
                 "would unblock you",
                 retryable=True,

@@ -18,6 +18,10 @@ ToolErrorCode = Literal[
     "not_a_directory",
     "patch_invalid",
     "patch_conflict",
+    "no_active_goal",
+    "goal_revision_mismatch",
+    "completion_rejected",
+    "blocker_not_established",
     "internal_error",
 ]
 
