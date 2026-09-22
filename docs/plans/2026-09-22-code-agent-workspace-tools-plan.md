@@ -275,7 +275,9 @@ class WorkspacePathError(Exception):
     """Raised when a path cannot be resolved inside the workspace."""
 
     def __init__(self, code: ToolErrorCode, message: str) -> None:
-        self.code = code
+        # Annotated: Pyright widens an unannotated attribute to ``str``, which
+        # then does not satisfy ``tool_error``'s Literal parameter.
+        self.code: ToolErrorCode = code
         self.message = message
         super().__init__(message)
 

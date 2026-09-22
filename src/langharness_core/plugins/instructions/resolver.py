@@ -7,6 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from langharness_core.common.text import digest, truncate_bytes
+from langharness_core.plugins.workspace.paths import (
+    WorkspacePathError,
+    resolve_workspace_path,
+)
 
 DEFAULT_BUDGET_BYTES = 65_536
 DEFAULT_NAMES: tuple[str, ...] = ("AGENTS.md",)
@@ -119,13 +123,9 @@ class InstructionResolver:
         """Resolve one touched path to a directory inside the workspace."""
         if not raw:
             return None
-        candidate = Path(raw)
-        absolute = candidate if candidate.is_absolute() else self._root / candidate
         try:
-            resolved = absolute.resolve()
-            if resolved != self._root:
-                resolved.relative_to(self._root)
-        except (OSError, ValueError):
+            resolved = resolve_workspace_path(self._root, raw).absolute
+        except WorkspacePathError:
             return None
         if resolved.is_dir():
             return resolved
