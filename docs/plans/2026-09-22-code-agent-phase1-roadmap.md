@@ -29,10 +29,28 @@ workspace/exec ┘
 | 序号 | 计划 | 交付物 | 状态 |
 |---:|---|---|---|
 | 1 | `docs/plans/2026-09-22-code-agent-prompt-sections-plan.md` | agent loop 在每个 model step 用有序、具名、带预算的 sections 组装 system prompt；`AGENTS.md` 按 workspace→目标路径逐层注入并按 hash 失效 | 已可执行（8 个任务，含逐步代码与测试） |
-| 2 | 尚未成文 | 受 workspace realpath 约束的读写/搜索/补丁工具，以及有 deadline、输出上限、环境白名单、后台 job 归属的命令执行 | 骨架见本文；开始前按同一流程写成独立计划文件 |
+| 2a | `docs/plans/2026-09-22-code-agent-workspace-tools-plan.md` | 受 workspace realpath 约束的 `list_directory` / `read_file` / `search_text` / `apply_patch` / `workspace_status`，以及 `ToolError` 与 mutation generation | 已可执行（8 个任务） |
+| 2b | 尚未成文 | 有 deadline、输出上限、环境白名单、后台 job 归属的命令执行：`exec_command` / `write_stdin` / `wait_job` / `stop_job` | 骨架见本文；开始前按同一流程写成独立计划文件 |
 | 3 | 尚未成文 | 持久化 goal 状态机、验证门禁、自动续跑控制器、`code` preset 与新的流事件 | 骨架见本文；开始前按同一流程写成独立计划文件 |
 
-计划 2 与计划 3 的计划文件在各自开工时创建（命名沿用
+**为什么把原计划 2 拆成 2a / 2b**：两者只共享 `ToolError` 与 mutation
+generation（都由 2a 引入），其余部分是独立子系统——文件路径安全与补丁原子性是
+一类问题，进程组、deadline 与 job 生命周期是另一类。拆开后各自结束时都能独立
+验收：2a 结束时 agent 已能在边界内读、搜、改；2b 结束时才能跑命令。
+
+### 计划 2a 开工前已验证的技术事实
+
+1. **阻塞式同步工具不会卡住事件循环**：LangChain 的 `BaseTool._arun` 通过
+   `run_in_executor` 把同步工具丢到线程池执行。实测在 `astream` 中调用一个
+   `time.sleep(2)` 的同步工具，事件循环心跳仍以 50ms 间隔跳了 40 次。因此
+   `exec_command` 可以用仓库现有的同步 `StructuredTool` 风格实现，不必改成
+   异步子进程。上限是默认线程池大小（`min(32, cpu+4)`），并发长命令会排队。
+2. **本机没有可用的 `rg` 二进制**：`shutil.which("rg")` 返回 `None`（shell 里的
+   `rg` 是 Claude Code 的包装函数，不是 PATH 上的可执行文件）。所以
+   `search_text` 的纯 Python 实现是主路径，ripgrep 只是存在时的加速分支，
+   两条路径都必须测到。
+
+计划 2b 与计划 3 的计划文件在各自开工时创建（命名沿用
 `YYYY-MM-DD-<feature>-plan.md`），本文只固定范围、依赖与验收，不预先占用文件名。
 
 Phase 2（PTC presentation）与 Phase 3（OS sandbox、reviewer、web/skills/delivery）
