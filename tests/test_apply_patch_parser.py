@@ -199,6 +199,56 @@ def test_apply_delete_file_returns_empty_text() -> None:
     assert apply_to_text("anything\n", file_patch) == ""
 
 
+def test_a_blank_line_inside_a_hunk_is_context() -> None:
+    plan = parse_patch(
+        "*** Begin Patch\n*** Update File: a.py\n@@\n-above\n+below\n\n tail\n*** End Patch\n"
+    )
+    assert [line.kind for line in plan.files[0].hunks[0].lines] == [
+        "remove",
+        "add",
+        "context",
+        "context",
+    ]
+    assert plan.files[0].hunks[0].lines[2].text == ""
+
+
+def test_an_unprefixed_line_inside_a_hunk_is_rejected() -> None:
+    with pytest.raises(PatchError) as caught:
+        parse_patch("*** Begin Patch\n*** Update File: a.py\n@@\nno prefix\n*** End Patch\n")
+    assert caught.value.code == "patch_invalid"
+    assert "unrecognised patch line" in caught.value.message
+
+
+def test_an_add_file_with_an_unprefixed_line_is_rejected() -> None:
+    with pytest.raises(PatchError) as caught:
+        parse_patch(
+            "*** Begin Patch\n*** Add File: b.py\n+ok\nplain\n*** End Patch\n"
+        )
+    assert caught.value.code == "patch_invalid"
+    assert "may only contain" in caught.value.message
+
+
+def test_an_anchor_line_between_hunks_starts_a_new_one() -> None:
+    plan = parse_patch(
+        "*** Begin Patch\n*** Update File: a.py\n@@ first\n-a\n+b\n@@ second\n-c\n+d\n"
+        "*** End Patch\n"
+    )
+    hunks = plan.files[0].hunks
+    assert [hunk.anchor for hunk in hunks] == ["first", "second"]
+
+
+def test_an_empty_file_with_no_anchor_stays_empty() -> None:
+    file_patch = FilePatch(
+        kind="update", path="a.py", move_to=None, hunks=(), lines=()
+    )
+    assert apply_to_text("", file_patch) == ""
+
+
+def test_deleting_every_line_yields_empty_text() -> None:
+    file_patch = update(Hunk((HunkLine("remove", "only"),)))
+    assert apply_to_text("only\n", file_patch) == ""
+
+
 def test_plan_round_trips_through_the_markers() -> None:
     plan = parse_patch(
         "*** Begin Patch\n*** Add File: b.py\n+only\n*** End Patch\n"

@@ -31,7 +31,9 @@ class PatchError(Exception):
     """A patch that cannot be parsed, or cannot be applied to this content."""
 
     def __init__(self, code: PatchErrorCode, message: str) -> None:
-        self.code = code
+        # Annotated: Pyright widens an unannotated attribute to ``str``, which
+        # then does not satisfy ``tool_error``'s Literal parameter.
+        self.code: PatchErrorCode = code
         self.message = message
         super().__init__(message)
 

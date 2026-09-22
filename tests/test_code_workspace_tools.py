@@ -4,7 +4,10 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from langharness_core.plugins.tools.code_workspace import CodeWorkspaceToolsPlugin
 from langharness_core.plugins.workspace.root import WorkspaceRootPlugin
@@ -36,7 +39,13 @@ def test_no_workspace_provider_means_no_tools() -> None:
 def test_tool_names_are_stable(tmp_path: Path) -> None:
     # Grows by one name per task: search_text (Task 4), apply_patch (Task 6),
     # workspace_status (Task 7).
-    assert set(tools(tmp_path)) == {"list_directory", "read_file", "search_text"}
+    assert set(tools(tmp_path)) == {
+        "list_directory",
+        "read_file",
+        "search_text",
+        "apply_patch",
+        "workspace_status",
+    }
 
 
 def test_list_directory_reports_entries_and_types(tmp_path: Path) -> None:
@@ -181,6 +190,234 @@ def test_search_text_returns_matches(tmp_path: Path) -> None:
         {"path": "a.py", "line": 1, "column": 1, "text": "needle"}
     ]
     assert result["engine"] == "python"
+    assert result["truncated"] is False
+
+
+def test_apply_patch_updates_a_file_and_records_a_mutation(tmp_path: Path) -> None:
+    write(tmp_path / "a.py", "old\n")
+    instance = plugin(tmp_path)
+    result = {item.name: item for item in instance.get_tools()}["apply_patch"].invoke(
+        {"patch": "*** Begin Patch\n*** Update File: a.py\n@@\n-old\n+new\n*** End Patch\n"}
+    )
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == "new\n"
+    assert result["changed"][0]["path"] == "a.py"
+    assert result["changed"][0]["change"] == "update"
+    assert result["changed"][0]["before_sha256"].startswith("sha256:")
+    assert result["generation"] == 1
+    assert instance._state.get_generation() == 1
+
+
+def test_apply_patch_adds_and_deletes_files(tmp_path: Path) -> None:
+    write(tmp_path / "gone.py", "x\n")
+    instance = plugin(tmp_path)
+    tools_ = {item.name: item for item in instance.get_tools()}
+    tools_["apply_patch"].invoke(
+        {
+            "patch": "*** Begin Patch\n*** Add File: new.py\n+hello\n"
+            "*** Delete File: gone.py\n*** End Patch\n"
+        }
+    )
+    assert (tmp_path / "new.py").read_text(encoding="utf-8") == "hello\n"
+    assert not (tmp_path / "gone.py").exists()
+    assert instance._state.get_generation() == 2
+
+
+def test_apply_patch_moves_a_file(tmp_path: Path) -> None:
+    write(tmp_path / "a.py", "body\n")
+    instance = plugin(tmp_path)
+    {item.name: item for item in instance.get_tools()}["apply_patch"].invoke(
+        {
+            "patch": "*** Begin Patch\n*** Update File: a.py\n*** Move to: b.py\n"
+            "@@\n-body\n+moved\n*** End Patch\n"
+        }
+    )
+    assert not (tmp_path / "a.py").exists()
+    assert (tmp_path / "b.py").read_text(encoding="utf-8") == "moved\n"
+
+
+def test_a_conflicting_hunk_writes_nothing(tmp_path: Path) -> None:
+    write(tmp_path / "a.py", "present\n")
+    write(tmp_path / "b.py", "untouched\n")
+    instance = plugin(tmp_path)
+    result = {item.name: item for item in instance.get_tools()}["apply_patch"].invoke(
+        {
+            "patch": "*** Begin Patch\n*** Update File: b.py\n@@\n-untouched\n+changed\n"
+            "*** Update File: a.py\n@@\n-absent\n+changed\n*** End Patch\n"
+        }
+    )
+    assert result["error"]["code"] == "patch_conflict"
+    # b.py was valid, but the batch is all-or-nothing.
+    assert (tmp_path / "b.py").read_text(encoding="utf-8") == "untouched\n"
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == "present\n"
+    assert instance._state.get_generation() == 0
+
+
+def test_a_malformed_patch_writes_nothing(tmp_path: Path) -> None:
+    instance = plugin(tmp_path)
+    result = {item.name: item for item in instance.get_tools()}["apply_patch"].invoke(
+        {"patch": "*** Update File: a.py\n-x\n+y\n"}
+    )
+    assert result["error"]["code"] == "patch_invalid"
+    assert instance._state.get_generation() == 0
+
+
+def test_apply_patch_refuses_to_escape_the_workspace(tmp_path: Path) -> None:
+    instance = plugin(tmp_path)
+    result = {item.name: item for item in instance.get_tools()}["apply_patch"].invoke(
+        {"patch": "*** Begin Patch\n*** Add File: ../escape.py\n+x\n*** End Patch\n"}
+    )
+    assert result["error"]["code"] == "path_outside_workspace"
+    assert not (tmp_path.parent / "escape.py").exists()
+
+
+def test_apply_patch_creates_missing_parent_directories(tmp_path: Path) -> None:
+    instance = plugin(tmp_path)
+    {item.name: item for item in instance.get_tools()}["apply_patch"].invoke(
+        {"patch": "*** Begin Patch\n*** Add File: deep/nested/new.py\n+x\n*** End Patch\n"}
+    )
+    assert (tmp_path / "deep" / "nested" / "new.py").read_text(encoding="utf-8") == "x\n"
+
+
+def test_apply_patch_reports_a_missing_target_file(tmp_path: Path) -> None:
+    instance = plugin(tmp_path)
+    result = {item.name: item for item in instance.get_tools()}["apply_patch"].invoke(
+        {"patch": "*** Begin Patch\n*** Update File: nope.py\n@@\n-a\n+b\n*** End Patch\n"}
+    )
+    assert result["error"]["code"] == "path_not_found"
+
+
+def test_apply_patch_refuses_to_overwrite_an_existing_file(tmp_path: Path) -> None:
+    write(tmp_path / "a.py", "already here\n")
+    instance = plugin(tmp_path)
+    result = {item.name: item for item in instance.get_tools()}["apply_patch"].invoke(
+        {"patch": "*** Begin Patch\n*** Add File: a.py\n+clobber\n*** End Patch\n"}
+    )
+    assert result["error"]["code"] == "patch_conflict"
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == "already here\n"
+
+
+def git_repo(path: Path) -> None:
+    for command in (
+        ["git", "init", "-q"],
+        ["git", "config", "user.email", "t@example.com"],
+        ["git", "config", "user.name", "T"],
+    ):
+        subprocess.run(command, cwd=path, check=True, capture_output=True)
+    write(path / "tracked.py", "original\n")
+    subprocess.run(["git", "add", "."], cwd=path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "init"], cwd=path, check=True, capture_output=True
+    )
+
+
+def test_workspace_status_reports_branch_and_head(tmp_path: Path) -> None:
+    git_repo(tmp_path)
+    result = tools(tmp_path)["workspace_status"].invoke({})
+    assert result["is_git_repo"] is True
+    assert result["branch"] in {"main", "master"}
+    assert len(result["head"]) == 40
+    assert result["generation"] == 0
+
+
+def test_workspace_status_distinguishes_agent_edits_from_yours(tmp_path: Path) -> None:
+    git_repo(tmp_path)
+    write(tmp_path / "yours.py", "user change\n")
+    instance = plugin(tmp_path)
+    tools_ = {item.name: item for item in instance.get_tools()}
+    tools_["apply_patch"].invoke(
+        {
+            "patch": "*** Begin Patch\n*** Update File: tracked.py\n@@\n-original\n+mine\n*** End Patch\n"
+        }
+    )
+    result = tools_["workspace_status"].invoke({})
+    by_path = {item["path"]: item["origin"] for item in result["dirty"]}
+    assert by_path["tracked.py"] == "agent"
+    assert by_path["yours.py"] == "pre_existing"
+
+
+def test_workspace_status_on_a_non_git_workspace(tmp_path: Path) -> None:
+    write(tmp_path / "a.py", "x\n")
+    result = tools(tmp_path)["workspace_status"].invoke({})
+    assert result["is_git_repo"] is False
+    assert result["dirty"] == []
+    assert result["generation"] == 0
+
+
+def test_workspace_status_truncates_a_flood_of_changes(tmp_path: Path) -> None:
+    git_repo(tmp_path)
+    for index in range(5):
+        write(tmp_path / f"new{index}.py", "x\n")
+    instance = plugin(tmp_path)
+    instance._max_entries = 2
+    result = {item.name: item for item in instance.get_tools()}["workspace_status"].invoke(
+        {}
+    )
+    assert len(result["dirty"]) == 2
+    assert result["truncated"] is True
+
+
+def test_list_directory_labels_special_files_as_other(tmp_path: Path) -> None:
+    import os
+
+    os.mkfifo(tmp_path / "pipe")
+    result = tools(tmp_path)["list_directory"].invoke({})
+    entry = next(item for item in result["entries"] if item["name"] == "pipe")
+    assert entry["type"] == "other"
+
+
+def test_apply_patch_reports_an_unreadable_target(tmp_path: Path) -> None:
+    target = tmp_path / "locked.py"
+    write(target, "body\n")
+    target.chmod(0o000)
+    try:
+        result = tools(tmp_path)["apply_patch"].invoke(
+            {
+                "patch": "*** Begin Patch\n*** Update File: locked.py\n@@\n-body\n+new\n*** End Patch\n"
+            }
+        )
+    finally:
+        target.chmod(0o600)
+    assert result["error"]["code"] == "path_not_found"
+
+
+def test_apply_patch_works_without_a_state_service(tmp_path: Path) -> None:
+    write(tmp_path / "a.py", "old\n")
+    instance = plugin(tmp_path)
+    instance._state = None
+    result = {item.name: item for item in instance.get_tools()}["apply_patch"].invoke(
+        {"patch": "*** Begin Patch\n*** Update File: a.py\n@@\n-old\n+new\n*** End Patch\n"}
+    )
+    assert result["changed"][0]["path"] == "a.py"
+    assert result["generation"] == 0
+
+
+def test_workspace_status_reports_the_rename_destination(tmp_path: Path) -> None:
+    git_repo(tmp_path)
+    subprocess.run(
+        ["git", "mv", "tracked.py", "renamed.py"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    result = tools(tmp_path)["workspace_status"].invoke({})
+    assert [item["path"] for item in result["dirty"]] == ["renamed.py"]
+
+
+def test_workspace_status_without_git_reports_no_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(*args: object, **kwargs: object) -> object:
+        raise FileNotFoundError("git is not installed")
+
+    monkeypatch.setattr(subprocess, "run", boom)
+    result = tools(tmp_path)["workspace_status"].invoke({})
+    assert result["is_git_repo"] is False
+
+
+def test_workspace_status_reports_a_clean_tree(tmp_path: Path) -> None:
+    git_repo(tmp_path)
+    result = tools(tmp_path)["workspace_status"].invoke({})
+    assert result["dirty"] == []
     assert result["truncated"] is False
 
 
