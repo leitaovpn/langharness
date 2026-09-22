@@ -18,6 +18,7 @@ from langharness_core.contracts import (
     SPEC_GOAL,
     SPEC_INTERRUPT_AFTER,
     SPEC_INTERRUPT_BEFORE,
+    SPEC_JOB_MANAGER,
     SPEC_LLM,
     SPEC_MIDDLEWARE,
     SPEC_NAME,
@@ -92,6 +93,16 @@ AGENT_PLUGIN_CATALOG: dict[str, tuple[str, str, str]] = {
     "goal-tools": (
         "langharness_core.plugins.goals.tools",
         "goal-tools-plugin-factory",
+        SPEC_TOOL,
+    ),
+    "exec": (
+        "langharness_core.plugins.exec.jobs",
+        "job-manager-plugin-factory",
+        SPEC_JOB_MANAGER,
+    ),
+    "exec-tools": (
+        "langharness_core.plugins.exec.tools",
+        "exec-tools-plugin-factory",
         SPEC_TOOL,
     ),
 }
@@ -271,6 +282,21 @@ AGENT_PLUGIN_DESCRIPTIONS: dict[str, str] = {
         "before a goal may reach 'complete'. Implements agent.plugin.tools. "
         "Properties: plugin.agent_id. Requires a restart for property changes. "
         "Uninstall when the agent is removed."
+    ),
+    "exec": (
+        "Starts and tracks background commands, owning each one's process "
+        "group so a cancelled job leaves nothing behind. Implements "
+        "agent.plugin.job_manager. Properties: plugin.exec.max_output_bytes, "
+        "plugin.exec.max_jobs, plugin.agent_id. Requires a restart for "
+        "property changes. Uninstall when the agent is removed."
+    ),
+    "exec-tools": (
+        "Provides exec_command and the job control tools (wait_job, "
+        "write_stdin, stop_job), bounded by the workspace cwd, a deadline, an "
+        "output cap and an environment allowlist. Implements "
+        "agent.plugin.tools. Properties: plugin.exec.default_timeout_seconds, "
+        "plugin.exec.max_timeout_seconds, plugin.agent_id. Requires a restart "
+        "for property changes. Uninstall when the agent is removed."
     ),
     "agent-loop": (
         "Runs the agent loop for one agent scope. Implements "
@@ -581,6 +607,14 @@ def builtin_package() -> PluginPackage:
                 "goal-tools-template",
                 "agent",
                 agent_plugin_template_descriptor("goal-tools"),
+            ),
+            PluginContribution(
+                "exec-template", "agent", agent_plugin_template_descriptor("exec")
+            ),
+            PluginContribution(
+                "exec-tools-template",
+                "agent",
+                agent_plugin_template_descriptor("exec-tools"),
             ),
             PluginContribution(
                 "agent-loop-template", "agent", agent_loop_template_descriptor()
