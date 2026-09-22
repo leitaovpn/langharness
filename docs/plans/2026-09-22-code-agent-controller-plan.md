@@ -866,9 +866,12 @@ def test_an_active_goal_continues(tmp_path: Path) -> None:
     assert isinstance(decision, Continue)
     assert decision.round == 1
     assert goal.id in decision.message
-    assert "revision 1" in decision.message
+    # The revision quoted is the one in force when the model reads it, i.e.
+    # after starting the round bumped it.
+    stored = instance._goals.get_goal(goal.id)
+    assert f"revision {stored.revision}" in decision.message
     # Continuing consumes a round.
-    assert instance._goals.get_goal(goal.id).rounds_started == 1
+    assert stored.rounds_started == 1
 
 
 def test_the_round_limit_blocks_the_goal(tmp_path: Path) -> None:
@@ -1007,7 +1010,6 @@ WRAPUP_NO_CHECKPOINTER = (
 @Provides(RunControllerProvider)
 @Property("_plugin_name", "plugin.name", "goal-round-controller")
 @Property("_plugin_version", "plugin.version", "1.0.0")
-@Property("_max_rounds", "plugin.goal.max_rounds", 32)
 @RequiresBest("_goals", GoalProvider, optional=True, immediate_rebind=True)
 @ScopedDependencies("_goals")
 class GoalRoundController:
@@ -1016,7 +1018,6 @@ class GoalRoundController:
     def __init__(self) -> None:
         self._plugin_name = "goal-round-controller"
         self._plugin_version = "1.0.0"
-        self._max_rounds = 32
         self._goals: Any = None
         self._guards: dict[str, ContractGuard] = {
             "_goals": ContractGuard(self, "_goals", GoalProvider),
@@ -1053,19 +1054,20 @@ class GoalRoundController:
                 reason="no-checkpointer",
                 wrapup=WRAPUP_NO_CHECKPOINTER,
             )
-        if goal.rounds_started >= int(self._max_rounds):
+        # The goal carries its own limit, set when it was created. Keeping the
+        # budget on the goal rather than on this component means it survives a
+        # restart alongside the goal it describes.
+        limit = int(goal.max_rounds)
+        if goal.rounds_started >= limit:
             self._mark_blocked(goal, "round-limit")
             return Stop(
                 status="blocked",
                 reason="round-limit",
-                wrapup=(
-                    f"The goal hit its {self._max_rounds}-round limit. "
-                    + WRAPUP_BLOCKED
-                ),
+                wrapup=f"The goal hit its {limit}-round limit. " + WRAPUP_BLOCKED,
             )
-        return self._continue(goal)
+        return self._continue(goal, limit)
 
-    def _continue(self, goal: Any) -> RunDecision:
+    def _continue(self, goal: Any, limit: int) -> RunDecision:
         try:
             updated = self._goals.update_goal(
                 goal.id, expected_revision=goal.revision, start_round=True
@@ -1076,7 +1078,7 @@ class GoalRoundController:
         return Continue(
             message=(
                 f"[goal {updated.id} · revision {updated.revision} · "
-                f"round {updated.rounds_started} of {self._max_rounds}]\n"
+                f"round {updated.rounds_started} of {limit}]\n"
                 f"Objective: {updated.objective}\n"
                 "The turn went quiet but the goal is not complete. Continue "
                 "working on it. If you believe it is done, call verify to see "

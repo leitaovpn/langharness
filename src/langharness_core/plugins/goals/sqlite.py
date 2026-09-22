@@ -97,9 +97,10 @@ class SQLiteGoalPlugin:
         objective: str,
         acceptance_criteria: list[dict[str, str]],
         *,
-        max_rounds: int = 32,
+        max_rounds: int | None = None,
     ) -> Goal:
         goal_id = uuid4().hex
+        resolved_rounds = int(self._max_rounds if max_rounds is None else max_rounds)
         timestamp = _now()
         criteria = [
             {
@@ -120,7 +121,7 @@ class SQLiteGoalPlugin:
                     goal_id,
                     objective,
                     json.dumps(criteria),
-                    max_rounds,
+                    resolved_rounds,
                     timestamp,
                     timestamp,
                 ),
