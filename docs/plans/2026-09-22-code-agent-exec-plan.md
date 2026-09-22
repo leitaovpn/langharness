@@ -933,9 +933,6 @@ class _Job:
         self.reader: threading.Thread | None = None
         self.stopping = False
 
-    def snapshot(self) -> JobRecord:
-        return self.record
-
 
 @ComponentFactory("job-manager-plugin-factory")
 @Provides(JobManagerProvider)

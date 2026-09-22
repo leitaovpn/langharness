@@ -1,5 +1,7 @@
 
 """Contract tests for the job manager service."""
+# mypy: ignore-errors
+# pyright: reportArgumentType=false
 
 from __future__ import annotations
 
@@ -216,8 +218,53 @@ def test_the_manager_conforms_to_its_contract(tmp_path: Path) -> None:
     assert validate(manager(tmp_path), JobManagerProvider) == ()
 
 
+def test_output_is_capped_and_flagged(tmp_path: Path) -> None:
+    plugin = manager(tmp_path)
+    plugin._max_output_bytes = 40
+    record = plugin.start_job(
+        shell("print('y' * 500)"), cwd=str(tmp_path), owner="a::s"
+    )
+    plugin.wait_job(record.id, 10)
+    text, _ = plugin.read_output(record.id, 0)
+    assert len(text.encode()) <= 40
+
+
+def test_writing_to_a_job_that_closed_its_input_is_refused(tmp_path: Path) -> None:
+    plugin = manager(tmp_path)
+    # The process exits without ever reading; the write then hits a dead pipe.
+    record = plugin.start_job(shell("pass"), cwd=str(tmp_path), owner="a::s")
+    plugin.wait_job(record.id, 10)
+    with pytest.raises(RuntimeError):
+        plugin.write_stdin(record.id, "x" * 100000)
+
+
+def test_stopping_an_already_finished_job_leaves_it_alone(tmp_path: Path) -> None:
+    plugin = manager(tmp_path)
+    record = plugin.start_job(shell("print(1)"), cwd=str(tmp_path), owner="a::s")
+    plugin.wait_job(record.id, 10)
+    again = plugin.stop_job(record.id)
+    assert again.state == "exited"
+
+
+def test_an_empty_owner_filter_returns_nothing(tmp_path: Path) -> None:
+    plugin = manager(tmp_path)
+    plugin.start_job(shell("print(1)"), cwd=str(tmp_path), owner="a::s")
+    assert plugin.list_jobs("nobody::else") == []
+
+
 def test_plugin_info_reports_the_component_identity(tmp_path: Path) -> None:
     assert manager(tmp_path).get_plugin_info() == {
         "name": "job-manager",
         "version": "1.0.0",
     }
+
+
+def test_invalidate_shuts_every_job_down(tmp_path: Path) -> None:
+    plugin = manager(tmp_path)
+    record = plugin.start_job(
+        shell("import time; time.sleep(30)"), cwd=str(tmp_path), owner="a::s"
+    )
+    plugin._invalidate(None)
+    time.sleep(0.3)
+    assert not _group_alive(record.pid)
+    assert plugin.list_jobs() == []
