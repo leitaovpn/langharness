@@ -502,6 +502,7 @@ git commit -m "feat: add workspace root provider plugin"
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import pytest
 
@@ -514,7 +515,9 @@ from langharness_core.plugins.prompts.sections import (
 )
 
 
-def section(name: str, order: int, text: str, source: str = "s", **kwargs) -> PromptSection:
+def section(
+    name: str, order: int, text: str, source: str = "s", **kwargs: Any
+) -> PromptSection:
     return PromptSection(name=name, order=order, text=text, source=source, **kwargs)
 
 
