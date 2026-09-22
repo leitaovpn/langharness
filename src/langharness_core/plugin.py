@@ -61,6 +61,11 @@ AGENT_PLUGIN_CATALOG: dict[str, tuple[str, str, str]] = {
         "repository-instructions-plugin-factory",
         SPEC_PROMPT_SECTION,
     ),
+    "prompt": (
+        "langharness_core.plugins.prompts.code_agent",
+        "code-agent-prompt-plugin-factory",
+        SPEC_PROMPT_SECTION,
+    ),
 }
 
 DEFAULT_AGENT_PLUGINS: tuple[str, ...] = ("tools", "name")
@@ -198,6 +203,12 @@ AGENT_PLUGIN_DESCRIPTIONS: dict[str, str] = {
         "agent.plugin.prompt_section. Properties: plugin.instructions.include, "
         "plugin.instructions.budget_bytes, plugin.agent_id. Requires a restart "
         "for property changes. Uninstall when the agent is removed."
+    ),
+    "prompt": (
+        "Contributes the shipped code-agent persona, safety, workflow and "
+        "completion prompt sections. Implements agent.plugin.prompt_section. "
+        "Properties: plugin.agent_id. Requires a restart for property changes. "
+        "Uninstall when the agent is removed."
     ),
     "agent-loop": (
         "Runs the agent loop for one agent scope. Implements "
@@ -480,6 +491,11 @@ def builtin_package() -> PluginPackage:
                 "repository-instructions-template",
                 "agent",
                 agent_plugin_template_descriptor("repository-instructions"),
+            ),
+            PluginContribution(
+                "code-agent-prompt-template",
+                "agent",
+                agent_plugin_template_descriptor("prompt"),
             ),
             PluginContribution(
                 "agent-loop-template", "agent", agent_loop_template_descriptor()

@@ -29,6 +29,7 @@ def test_console_script_and_packaging_dependencies_are_declared() -> None:
         "setuptools"
     ]["package-data"]
     assert "config/langharness.toml" in package_data["langharness_config"]
+    assert "prompts/code_agent/*.md" in package_data["langharness_core"]
 
 
 def test_packaging_scripts_are_executable_and_valid_bash() -> None:
