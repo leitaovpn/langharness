@@ -703,7 +703,7 @@ buffer）。`read_output(offset)` 返回增量，`drain_events()` 返回待发�
 先**扩充文件顶部的导入块**（Task 1 建的文件已有 contracts 与 validation 的导入）：
 
 ```python
-import subprocess
+import os
 import sys
 import time
 from pathlib import Path
@@ -712,6 +712,9 @@ import pytest
 
 from langharness_core.plugins.exec.jobs import JobManagerPlugin
 ```
+
+（`subprocess` 不在这一块里：`_group_alive` 自己局部导入它，模块级再导一次会被
+Ruff 判成 `F401` + `F811`。`os` 则必须是模块级的——`_group_alive` 用到它。）
 
 再在文件**末尾追加**下面的测试函数。导入必须并进顶部那一块：Ruff 的 `E402`
 （select 里的 `E4`）会拦下出现在代码之后的 import。
