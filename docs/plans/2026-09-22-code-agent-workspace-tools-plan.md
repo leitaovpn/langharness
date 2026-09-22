@@ -305,14 +305,18 @@ def resolve_workspace_path(root: str | Path, raw: str | None) -> WorkspacePath:
     A blank path means the workspace root, which is what a directory listing
     without arguments should show.
     """
-    base = Path(root).resolve()
     text = (raw or "").strip()
-    candidate = Path(text) if text else base
-    absolute = candidate if candidate.is_absolute() else base / candidate
     try:
+        # The root is resolved here too: a tool must never turn an I/O failure
+        # into a traceback, whichever end of the join caused it.
+        base = Path(root).resolve()
+        candidate = Path(text) if text else base
+        absolute = candidate if candidate.is_absolute() else base / candidate
         resolved = absolute.resolve()
     except OSError as exc:
-        raise WorkspacePathError(PATH_NOT_FOUND, f"cannot resolve {text!r}: {exc}") from exc
+        raise WorkspacePathError(
+            PATH_NOT_FOUND, f"cannot resolve {text!r}: {exc}"
+        ) from exc
     try:
         relative = resolved.relative_to(base)
     except ValueError as exc:
@@ -1402,9 +1406,9 @@ def _search_with_ripgrep(
         if len(parts) != 4:
             continue
         raw_path, raw_number, raw_column, text = parts
+        # rg prefixes paths with "./" when the search root is "."; Path drops
+        # it, so the workspace-relative spelling falls out of as_posix().
         relative = Path(raw_path).as_posix()
-        if relative.startswith("./"):
-            relative = relative[2:]
         files.add(relative)
         try:
             line_number = int(raw_number)
