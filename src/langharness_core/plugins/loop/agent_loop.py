@@ -32,6 +32,7 @@ from langharness_core.contracts import (
     DebugProvider,
     InterruptAfterProvider,
     InterruptBeforeProvider,
+    JobManagerProvider,
     LLMProvider,
     MiddlewareProvider,
     NameProvider,
@@ -145,6 +146,7 @@ def _iter_interrupts(container: Any) -> Iterator[Any]:
 @RequiresBest(
     "_workspace_provider", WorkspaceProvider, optional=True, immediate_rebind=True
 )
+@RequiresBest("_job_manager", JobManagerProvider, optional=True, immediate_rebind=True)
 @RequiresBest(
     "_response_format_provider",
     ResponseFormatProvider,
@@ -199,6 +201,7 @@ def _iter_interrupts(container: Any) -> Iterator[Any]:
     "_system_prompt_providers",
     "_prompt_section_providers",
     "_workspace_provider",
+    "_job_manager",
     "_name_provider",
     "_response_format_provider",
     "_cache_provider",
@@ -219,6 +222,7 @@ class PluginAgentLoop:
         self._system_prompt_providers: list[Any] = []
         self._prompt_section_providers: list[Any] = []
         self._workspace_provider: Any = None
+        self._job_manager: Any = None
         self._response_format_provider: Any = None
         self._state_schema_provider: Any = None
         self._context_schema_provider: Any = None
@@ -247,6 +251,9 @@ class PluginAgentLoop:
             ),
             "_workspace_provider": ContractGuard(
                 self, "_workspace_provider", WorkspaceProvider
+            ),
+            "_job_manager": ContractGuard(
+                self, "_job_manager", JobManagerProvider
             ),
             "_response_format_provider": ContractGuard(
                 self, "_response_format_provider", ResponseFormatProvider
@@ -437,6 +444,17 @@ class PluginAgentLoop:
         self._guards[field].release(service)
         self._graph = None
 
+    @BindField("_job_manager", if_valid=True)
+    def _on_job_manager_bind(self, field: str, service: Any, reference: Any) -> None:
+        if not self._guards[field].admit(service):
+            return
+        self._rebuild()
+
+    @UnbindField("_job_manager")
+    def _on_job_manager_unbind(self, field: str, service: Any, reference: Any) -> None:
+        self._guards[field].release(service)
+        self._graph = None
+
     @BindField("_response_format_provider", if_valid=True)
     def _on_response_format_bind(self, field: str, service: Any, reference: Any) -> None:
         if not self._guards[field].admit(service):
@@ -584,6 +602,22 @@ class PluginAgentLoop:
         for provider in self._effective(self._middleware_providers):
             middlewares.extend(provider.get_middlewares())
         return middlewares
+
+    def _drain_job_events(self) -> list[dict[str, Any]]:
+        """Take whatever background-job events have queued up.
+
+        Drained between graph chunks rather than concurrently: output from a
+        long-running job surfaces on the next chunk, not the instant it is
+        produced. That is a deliberate trade of immediacy for a stream that
+        stays a single, testable iterator.
+        """
+        if self._job_manager is None:
+            return []
+        try:
+            return list(self._job_manager.drain_events())
+        except Exception:
+            LOGGER.exception("Job event drain failed; continuing without events")
+            return []
 
     def _workspace_root(self) -> str:
         """The realpath every path-taking plugin resolves against."""
@@ -741,6 +775,8 @@ class PluginAgentLoop:
             config=config,
             stream_mode=["messages", "updates"],
         ):
+            for job_event in self._drain_job_events():
+                yield job_event
             if stream_type == "messages":
                 streamed_message = chunk[0]
                 usage = _extract_usage(streamed_message)
