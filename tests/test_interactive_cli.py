@@ -6,16 +6,25 @@
 from __future__ import annotations
 
 import json
+import sys
+from collections.abc import Callable
+from types import SimpleNamespace
 
+import httpx
 import pytest
 from prompt_toolkit.completion import CompleteEvent
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import fragment_list_to_text
+from prompt_toolkit.keys import Keys
+from prompt_toolkit.shortcuts import CompleteStyle
 
+import langharness_cli.common.interactive as interactive_module
 import langharness_cli.plugins.commands.health as health_module
 from langharness_cli.common.interactive import InteractiveCLIRunner
+from langharness_cli.common.theme import SELECTED_BACKGROUND
 from langharness_cli.contracts import InteractiveCommandSpec
 from langharness_cli.plugins.commands.health import HealthCommandPlugin
+from langharness_cli.plugins.commands.model import ModelCommandPlugin
 from langharness_cli.plugins.commands.shell import ShellCommandPlugin
 from langharness_cli.plugins.rich_renderer import RichInteractiveRenderer
 
@@ -101,9 +110,8 @@ def test_interactive_runner_stream_request(
     )
     runner.do_stream("hello")
     output = capsys.readouterr().out
-    assert "+ bash {'commands': 'pwd'}" in output
-    assert "✓ bash (" in output
-    assert "10B" in output
+    assert "● bash" in output
+    assert "⎿ /workspace" in output
     assert "done" in output
     assert captured["json"] == {
         "input": "hello",
@@ -412,7 +420,8 @@ def test_cmdloop_uses_prompt_session_and_injected_renderer() -> None:
 
     assert "conversation" in renderer.welcome
     assert len(prompts) == 1
-    assert prompts[0][1]["bottom_toolbar"].startswith(" gpt-4o-mini")
+    # Read through the callable: prompt_toolkit re-reads it on every repaint.
+    assert prompts[0][1]["bottom_toolbar"]().startswith(" gpt-4o-mini")
 
 
 class RecordingRenderer:
@@ -740,3 +749,434 @@ def test_approval_resume_response_events_are_rendered(monkeypatch) -> None:
         "decisions": [{"type": "approve"}]
     }
     assert {"type": "assistant", "content": "done"} in renderer.events
+
+
+# --- command palette ------------------------------------------------------
+
+
+def _command(name: str, help_text: str = "does a thing") -> InteractiveCommandSpec:
+    return InteractiveCommandSpec(
+        name=name, help=help_text, handler=lambda context, line: False
+    )
+
+
+def test_prompt_completion_ranks_subsequence_matches() -> None:
+    runner = InteractiveCLIRunner(
+        base_url="http://api",
+        token="secret",
+        commands=[_command("session"), _command("scroll-speed"), _command("help")],
+    )
+
+    completions = list(
+        runner._command_completer().get_completions(
+            Document("/ss", cursor_position=3), CompleteEvent()
+        )
+    )
+
+    assert [completion.text for completion in completions] == [
+        "/session",
+        "/scroll-speed",
+    ]
+
+
+def test_prompt_completion_leaves_plain_messages_alone() -> None:
+    runner = InteractiveCLIRunner(
+        base_url="http://api", token="secret", commands=[_command("help")]
+    )
+
+    completions = list(
+        runner._command_completer().get_completions(
+            Document("write a /he", cursor_position=11), CompleteEvent()
+        )
+    )
+
+    assert completions == []
+
+
+def test_model_argument_completes_from_configured_providers() -> None:
+    runner = InteractiveCLIRunner(
+        base_url="http://api",
+        token="secret",
+        commands=ModelCommandPlugin().get_interactive_commands(),
+        configs=SimpleNamespace(list_providers=lambda: ["demo", "prod"]),
+    )
+
+    completions = list(
+        runner._command_completer().get_completions(
+            Document("/model ", cursor_position=7), CompleteEvent()
+        )
+    )
+
+    assert [completion.text for completion in completions] == ["demo", "prod"]
+
+
+def test_prompt_session_uses_the_shared_palette_style(monkeypatch) -> None:
+    captured: dict = {}
+
+    class RecordingSession:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(interactive_module, "PromptSession", RecordingSession)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    InteractiveCLIRunner(
+        base_url="http://api", token="secret", commands=[_command("help")]
+    )
+
+    attrs = captured["style"].get_attrs_for_style_str(
+        "class:completion-menu.completion.current"
+    )
+
+    assert attrs.bgcolor == SELECTED_BACKGROUND.removeprefix("bg:#")
+    assert attrs.reverse is False
+
+
+def test_cmdloop_asks_for_a_single_column_menu() -> None:
+    prompts = []
+
+    class FakeSession:
+        def prompt(self, *args, **kwargs):
+            prompts.append((args, kwargs))
+            return "/exit"
+
+    runner = InteractiveCLIRunner(
+        base_url="http://api",
+        token="secret",
+        # cmdloop only stops when a command's handler returns True, so an
+        # exit that actually exits is required or this spins forever.
+        commands=[
+            _command("help"),
+            InteractiveCommandSpec(
+                name="exit", help="leave", handler=lambda context, line: True
+            ),
+        ],
+        session=FakeSession(),
+    )
+    runner._interactive_input = True
+    runner.cmdloop()
+
+    assert prompts[0][1]["complete_style"] == CompleteStyle.COLUMN
+
+
+def _completions(runner, text: str) -> list[str]:
+    return [
+        completion.text
+        for completion in runner._command_completer().get_completions(
+            Document(text, cursor_position=len(text)), CompleteEvent()
+        )
+    ]
+
+
+def test_a_command_can_declare_its_own_argument_completion() -> None:
+    def complete(context, words, prefix):
+        # Reading the context proves the spec's completer is handed one.
+        return ["alpha", "beta"] if context.user_id == "local_user" else []
+
+    command = InteractiveCommandSpec(
+        name="demo", help="d", handler=lambda context, line: False, complete=complete
+    )
+    runner = InteractiveCLIRunner(
+        base_url="http://api", token="secret", commands=[command]
+    )
+
+    assert _completions(runner, "/demo ") == ["alpha", "beta"]
+
+
+def test_a_declared_completer_sees_the_deeper_slots() -> None:
+    seen: list[list[str]] = []
+
+    def complete(context, words, prefix):
+        seen.append(list(words))
+        return ["set"] if words == ["runtime"] else []
+
+    command = InteractiveCommandSpec(
+        name="plugins", help="p", handler=lambda context, line: False, complete=complete
+    )
+    runner = InteractiveCLIRunner(
+        base_url="http://api", token="secret", commands=[command]
+    )
+
+    assert _completions(runner, "/plugins runtime s") == ["set"]
+    assert seen == [["runtime"]]
+
+
+def test_model_declares_its_own_completion_from_the_runner_providers() -> None:
+    runner = InteractiveCLIRunner(
+        base_url="http://api",
+        token="secret",
+        commands=ModelCommandPlugin().get_interactive_commands(),
+        configs=SimpleNamespace(list_providers=lambda: ["demo"]),
+    )
+
+    assert _completions(runner, "/model de") == ["demo"]
+
+
+def _catalogue_response(url: str, tools: list[dict]) -> httpx.Response:
+    return httpx.Response(
+        200, json={"tools": tools}, request=httpx.Request("GET", url)
+    )
+
+
+def test_tool_call_events_arrive_at_the_renderer_with_a_headline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[dict] = []
+
+    class CapturingRenderer(RecordingRenderer):
+        def render_event(self, event):
+            seen.append(dict(event))
+
+    monkeypatch.setattr(
+        "langharness_cli.common.interactive.httpx.stream",
+        lambda *a, **k: stream_response(
+            [
+                {
+                    "type": "tool_call",
+                    "name": "bash",
+                    "tool_call_id": "c1",
+                    "args": {"commands": "pwd"},
+                },
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        "langharness_cli.common.interactive.httpx.get",
+        lambda url, **kwargs: _catalogue_response(
+            url, [{"name": "bash", "headline": "Bash({commands})"}]
+        ),
+    )
+    runner = InteractiveCLIRunner(
+        base_url="http://api",
+        token="secret",
+        commands=[],
+        renderer=CapturingRenderer(),
+        agent_id="simple_agent",
+    )
+    runner.do_stream("hi")
+
+    tool_call = next(event for event in seen if event["type"] == "tool_call")
+    assert tool_call["headline"] == "Bash(pwd)"
+
+
+def test_an_unknown_tool_falls_back_to_its_bare_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[dict] = []
+
+    class CapturingRenderer(RecordingRenderer):
+        def render_event(self, event):
+            seen.append(dict(event))
+
+    monkeypatch.setattr(
+        "langharness_cli.common.interactive.httpx.stream",
+        lambda *a, **k: stream_response(
+            [
+                {
+                    "type": "tool_call",
+                    "name": "bash",
+                    "tool_call_id": "c1",
+                    "args": {"commands": "pwd"},
+                },
+                {
+                    "type": "tool_call",
+                    "name": "mystery",
+                    "tool_call_id": "c2",
+                    "args": {"x": 1},
+                },
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        "langharness_cli.common.interactive.httpx.get",
+        lambda url, **kwargs: _catalogue_response(
+            url, [{"name": "bash", "headline": "Bash({commands})"}]
+        ),
+    )
+    runner = InteractiveCLIRunner(
+        base_url="http://api",
+        token="secret",
+        commands=[],
+        renderer=CapturingRenderer(),
+        agent_id="simple_agent",
+    )
+    runner.do_stream("hi")
+
+    calls = {event["name"]: event for event in seen if event["type"] == "tool_call"}
+    # The known tool proves the catalogue was consulted, so the absence on
+    # the unknown one means "declined", not "never looked".
+    assert calls["bash"]["headline"] == "Bash(pwd)"
+    assert "headline" not in calls["mystery"]
+
+
+def test_a_failing_catalogue_leaves_the_transcript_intact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[dict] = []
+
+    class CapturingRenderer(RecordingRenderer):
+        def render_event(self, event):
+            seen.append(dict(event))
+
+    attempts: list[str] = []
+
+    def refuse(url, **kwargs):
+        attempts.append(url)
+        raise httpx.ConnectError("no server")
+
+    monkeypatch.setattr(
+        "langharness_cli.common.interactive.httpx.stream",
+        lambda *a, **k: stream_response(
+            [
+                {
+                    "type": "tool_call",
+                    "name": "bash",
+                    "tool_call_id": "c1",
+                    "args": {"commands": "pwd"},
+                },
+                {"type": "assistant", "content": "done"},
+            ]
+        ),
+    )
+    monkeypatch.setattr("langharness_cli.common.interactive.httpx.get", refuse)
+    runner = InteractiveCLIRunner(
+        base_url="http://api",
+        token="secret",
+        commands=[],
+        renderer=CapturingRenderer(),
+        agent_id="simple_agent",
+    )
+    runner.do_stream("hi")
+
+    # Counting the attempt keeps this from passing before the catalogue
+    # exists at all: the point is that a failed lookup is survivable.
+    assert attempts == ["http://api/agents/simple_agent/tools"]
+    assert any(event["type"] == "assistant" for event in seen)
+
+
+DETAIL = "args: {'commands': 'pwd'}"
+
+
+class _RendererWithDetail(RichInteractiveRenderer):
+    """A renderer whose last response has something to expand."""
+
+    def expansion_text(self) -> str:
+        return DETAIL
+
+
+class _KeyPress:
+    """Enough of prompt_toolkit's key event to carry one press."""
+
+    def __init__(self) -> None:
+        self.repaints = 0
+        self.app = self
+
+    def invalidate(self) -> None:
+        self.repaints += 1
+
+
+def _ctrl_o(runner: InteractiveCLIRunner):
+    bindings = runner._key_bindings()
+    return next(
+        binding for binding in bindings.bindings if binding.keys == (Keys.ControlO,)
+    )
+
+
+def _runner_with_detail(**kwargs) -> InteractiveCLIRunner:
+    return InteractiveCLIRunner(
+        base_url="http://api",
+        token="secret",
+        commands=kwargs.pop("commands", []),
+        renderer=_RendererWithDetail(),
+        **kwargs,
+    )
+
+
+def test_ctrl_o_opens_the_detail_and_the_same_key_closes_it() -> None:
+    runner = _runner_with_detail()
+    ctrl_o = _ctrl_o(runner)
+    event = _KeyPress()
+
+    ctrl_o.handler(event)
+    opened = runner._toolbar()
+
+    ctrl_o.handler(event)
+    closed = runner._toolbar()
+
+    assert DETAIL in opened
+    assert DETAIL not in closed
+
+
+def test_ctrl_o_asks_prompt_toolkit_to_repaint() -> None:
+    """Erasing the detail is prompt_toolkit's job, not a reprint's.
+
+    Without the invalidate the pane would never be drawn or taken back, which
+    is the shape of the bug this replaced: a key that only ever adds.
+    """
+    runner = _runner_with_detail()
+    event = _KeyPress()
+
+    _ctrl_o(runner).handler(event)
+
+    assert event.repaints == 1
+
+
+def test_the_prompt_gets_a_toolbar_it_reads_when_it_draws() -> None:
+    """A callable, not a snapshot: the pane opens while the prompt is running."""
+    toolbars: list[Callable[[], str]] = []
+
+    class FakeSession:
+        def prompt(self, *args, **kwargs):
+            toolbar = kwargs["bottom_toolbar"]
+            toolbars.append(toolbar)
+            # The key is pressed while the prompt is up, then it repaints.
+            _ctrl_o(runner).handler(_KeyPress())
+            return "/exit"
+
+    runner = _runner_with_detail(
+        commands=[
+            _command("help"),
+            InteractiveCommandSpec(
+                name="exit", help="leave", handler=lambda context, line: True
+            ),
+        ],
+        session=FakeSession(),
+    )
+    runner._interactive_input = True
+
+    runner.cmdloop()
+
+    assert callable(toolbars[0])
+    assert DETAIL in toolbars[0]()
+
+
+def test_submitting_a_line_takes_the_detail_down() -> None:
+    """The pane describes the prompt it was opened at, not the next one."""
+    seen: list[str] = []
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.lines = ["/noop", "/exit"]
+
+        def prompt(self, *args, **kwargs):
+            toolbar = kwargs["bottom_toolbar"]
+            if not seen:
+                # Open the pane the way a person would: at the prompt.
+                _ctrl_o(runner).handler(_KeyPress())
+            seen.append(toolbar())
+            return self.lines.pop(0)
+
+    runner = _runner_with_detail(
+        commands=[
+            _command("noop"),
+            InteractiveCommandSpec(
+                name="exit", help="leave", handler=lambda context, line: True
+            ),
+        ],
+        session=FakeSession(),
+    )
+    runner._interactive_input = True
+
+    runner.cmdloop()
+
+    assert DETAIL in seen[0]
+    assert DETAIL not in seen[1]

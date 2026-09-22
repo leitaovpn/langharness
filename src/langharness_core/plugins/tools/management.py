@@ -175,6 +175,25 @@ class ManagementToolsPlugin:
             self._properties_tool(manager),
         ]
 
+    def get_tool_presentations(self) -> dict[str, str]:
+        """How each call reads in the CLI transcript.
+
+        A template naming an argument the tool does not take makes the
+        renderer fall back to the bare tool name, so these keys have to match
+        the signatures below exactly.
+        """
+        return {
+            "list_scope_tree": "list_scope_tree()",
+            "list_runtime_plugins": "list_runtime_plugins()",
+            "discover_plugins": "discover_plugins()",
+            "install_plugin": "install_plugin({package_id} → {scope})",
+            "enable_plugin": "enable_plugin({name} @ {scope})",
+            "disable_plugin": "disable_plugin({name} @ {scope})",
+            "upgrade_plugin": "upgrade_plugin({name} @ {scope})",
+            "uninstall_plugin": "uninstall_plugin({name} @ {scope})",
+            "update_plugin_properties": "update_plugin_properties({name} @ {scope})",
+        }
+
     def get_plugin_info(self) -> dict[str, str]:
         return {"name": self._plugin_name, "version": self._plugin_version}
 

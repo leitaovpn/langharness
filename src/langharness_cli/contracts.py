@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
@@ -27,6 +27,10 @@ class InteractiveCommandSpec:
     name: str
     help: str
     handler: Callable[[InteractiveCommandContext, str], bool | None]
+    #: Optional. Declared by the command that owns the grammar rather than
+    #: by the shell, so a command's actions and their completion cannot drift
+    #: apart the way a shared lookup table would let them.
+    complete: ArgumentCompleter | None = None
 
 
 @runtime_checkable
@@ -47,6 +51,15 @@ class InteractiveCommandContext(Protocol):
     def refresh_status(self) -> None: ...
 
 
+#: Supplies candidates for one argument slot of an interactive command.
+#: Receives the command's context, the argument words already typed before
+#: the slot, and the word being typed. An implementation that cannot answer
+#: a slot returns nothing rather than guessing.
+ArgumentCompleter = Callable[
+    ["InteractiveCommandContext", Sequence[str], str], Iterable[str]
+]
+
+
 @service_contract(SPEC_CLI_COMMAND)
 @runtime_checkable
 class CLICommandProvider(Protocol):
@@ -60,13 +73,18 @@ class CLICommandProvider(Protocol):
 @service_contract(SPEC_CLI_RENDERER)
 @runtime_checkable
 class InteractiveRenderer(Protocol):
-    def show_welcome(self, text: str) -> None: ...
+    def show_welcome(self, text: str, *, highlights: Sequence[str] = ()) -> None: ...
 
     def start_response(self) -> None: ...
 
     def render_event(self, event: Mapping[str, Any]) -> None: ...
 
     def finish_response(self) -> None: ...
+
+    #: The escape hatch for whatever the transcript collapsed: the detail is
+    #: given back as text, so that the caller can draw it somewhere it can
+    #: take away again. Printing it would be a one-way door.
+    def expansion_text(self) -> str: ...
 
     def show_error(self, message: str) -> None: ...
 

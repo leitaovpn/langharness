@@ -29,6 +29,18 @@ class ToolExportAdapter:
             return []
         return [self._make_tool(export) for export in self._exports or []]
 
+    def get_tool_presentations(self) -> dict[str, str]:
+        """Headlines for exported tools, as each declaration supplied them.
+
+        An export that declared none is left out rather than given a
+        generated default: absent is how the palette says "show the name".
+        """
+        return {
+            export.name: export.headline
+            for export in self._exports or []
+            if export.headline
+        }
+
     def _make_tool(self, export: ToolExport) -> StructuredTool:
         target = self._target
 

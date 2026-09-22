@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time as time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,18 +12,30 @@ from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.table import Table
 from rich.text import Text
 
 from langharness_cli.common.i18n import tr
+from langharness_cli.common.toolview import OutputLine, render_output
 from langharness_cli.contracts import InteractiveRenderer
 
 SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 THROTTLE_SECONDS = 0.125
-ARG_SUMMARY_MAX = 60
 # Status line plus slack: the live frame must stay shorter than the terminal,
 # otherwise rich cannot move the cursor back to the top and each re-render
 # duplicates the whole frame into the scrollback.
 LIVE_MARGIN = 3
+#: Below this width the two halves of the welcome banner are stacked instead
+#: of placed side by side; the highlights column gets unreadable otherwise.
+BANNER_MIN_WIDTH = 80
+
+APP_LOGO = (
+    " ██╗     ██╗  ██╗\n"
+    " ██║     ██║  ██║\n"
+    " ██║     ███████║\n"
+    " ███████╗██╔══██║\n"
+    " ╚══════╝╚═╝  ╚═╝"
+)
 
 
 @dataclass
@@ -31,11 +43,14 @@ class _ToolRun:
     """One tool invocation as tracked by the renderer."""
 
     name: str
-    args_summary: str
+    headline: str
+    args: Any
     started: float
     status: str = "running"
     duration_ms: int = 0
     output_bytes: int = 0
+    #: Kept in full, not just counted: ctrl+o prints it back verbatim.
+    output: str = ""
 
 
 @ComponentFactory("rich-cli-renderer-factory")
@@ -61,10 +76,37 @@ class RichInteractiveRenderer:
         self._last_frame = float("-inf")
         self._spinner_idx = 0
 
-    def show_welcome(self, text: str) -> None:
-        self.console.print(
-            Panel.fit(text, title="[bold cyan]langharness[/bold cyan]", border_style="cyan")
+    def show_welcome(self, text: str, *, highlights: Sequence[str] = ()) -> None:
+        """Welcome screen: identity on the left, what's new on the right.
+
+        ``highlights`` is supplied by the caller rather than read from
+        anywhere here -- the renderer has no business knowing what counts as
+        news, and an empty list is the common case.
+        """
+        body = Group(Text(APP_LOGO, style="cyan"), Text(""), Text(text, style="dim"))
+        title = "[bold cyan]langharness[/bold cyan]"
+        if not highlights:
+            # Nothing to sit beside, so keep the compact box the shell has
+            # always shown rather than stretching to the terminal width.
+            self.console.print(
+                Panel.fit(body, title=title, border_style="cyan")
+            )
+            return
+        identity = Panel(body, title=title, border_style="cyan")
+        news = Panel(
+            Group(*(Text(f"· {item}") for item in highlights)),
+            title="[bold cyan]What's new[/bold cyan]",
+            border_style="cyan",
         )
+        if self.console.width < BANNER_MIN_WIDTH:
+            self.console.print(identity)
+            self.console.print(news)
+            return
+        grid = Table.grid(padding=(0, 2))
+        grid.add_column()
+        grid.add_column(ratio=1)
+        grid.add_row(identity, news)
+        self.console.print(grid)
 
     def set_model(self, name: str) -> None:
         self._model = name
@@ -111,6 +153,46 @@ class RichInteractiveRenderer:
         self._flush_live()
         self._status = "idle"
 
+    def expansion_text(self) -> str:
+        """The detail the collapsed row withheld, as text.
+
+        Handed back rather than printed: a line written into the scrollback
+        can never be taken away again, so whoever draws this has to own it.
+        The caller decides where it goes, and can therefore also stop.
+
+        Cut to the window, because the caller draws it inside a region that
+        the terminal bounds -- on the scrollback length never mattered.
+        """
+        lines = self._expansion_lines()
+        budget = max(1, self.console.height - LIVE_MARGIN)
+        if len(lines) > budget:
+            dropped = len(lines) - (budget - 1)
+            lines = [
+                *lines[: budget - 1],
+                tr(self._locale, "tool_expand_cut", count=dropped),
+            ]
+        return "\n".join(lines)
+
+    def _expansion_lines(self) -> list[str]:
+        runs = list(self._tool_runs.values())
+        if not runs:
+            return [tr(self._locale, "tool_nothing_to_expand")]
+        lines = [
+            tr(self._locale, "tool_expand_header")
+            + tr(self._locale, "tool_collapse_hint")
+        ]
+        for run in runs:
+            meta = self._result_meta(run)
+            lines.append(f"● {run.headline}" + (f" ({meta})" if meta else ""))
+            lines.append(f"  {tr(self._locale, 'tool_expand_args')} {run.args}")
+            # Split, not embedded: the budget is counted in rows, and a
+            # multi-line output counted as one would blow through it.
+            output = run.output.rstrip() or tr(self._locale, "tool_no_output")
+            first, *rest = output.split("\n")
+            lines.append(f"  {tr(self._locale, 'tool_expand_output')} {first}")
+            lines.extend(rest)
+        return lines
+
     def show_error(self, message: str) -> None:
         self._flush_live()
         self._status = "error"
@@ -132,13 +214,17 @@ class RichInteractiveRenderer:
     def _on_tool_call(self, event: Mapping[str, Any]) -> None:
         name = str(event.get("name", "tool"))
         tool_call_id = str(event.get("tool_call_id") or f"run-{len(self._tool_runs)}")
-        args_summary = self._summarize_args(event.get("args"))
-        run = _ToolRun(name=name, args_summary=args_summary, started=time.monotonic())
+        run = _ToolRun(
+            name=name,
+            headline=str(event.get("headline") or name),
+            args=event.get("args"),
+            started=time.monotonic(),
+        )
         self._tool_runs[tool_call_id] = run
         self._segments.append(run)
         self._status = "tool"
         if not self.console.is_terminal:
-            self.console.print(f"+ {name} {args_summary}".rstrip())
+            self.console.print(f"● {run.headline}", markup=False, highlight=False)
             return
         self._refresh(force=True)
 
@@ -148,13 +234,16 @@ class RichInteractiveRenderer:
         output = str(event.get("output", ""))
         run = self._tool_runs.get(tool_call_id) or self._find_running_run(name)
         if run is None:
-            run = _ToolRun(name=name, args_summary="", started=time.monotonic())
+            run = _ToolRun(
+                name=name, headline=name, args=None, started=time.monotonic()
+            )
             self._segments.append(run)
         run.status = "error" if self._is_error(output) else "done"
         run.duration_ms = max(0, int((time.monotonic() - run.started) * 1000))
         run.output_bytes = len(output.encode("utf-8"))
+        run.output = output
         if not self.console.is_terminal:
-            self.console.print(self._tool_result_line(run))
+            self.console.print(self._output_line(run), markup=False, highlight=False)
             return
         self._refresh(force=True)
 
@@ -200,6 +289,8 @@ class RichInteractiveRenderer:
             head = self._segments[0]
             if not isinstance(head, str):
                 committed.append(self._tool_line(head))
+                if head.status != "running":
+                    committed.append(Text(self._output_line(head), style="dim"))
                 self._segments.pop(0)
                 continue
             lines = head.split("\n")
@@ -245,35 +336,39 @@ class RichInteractiveRenderer:
                 items.append(Markdown(segment))
             else:
                 items.append(self._tool_line(segment))
+                if segment.status != "running":
+                    items.append(Text(self._output_line(segment), style="dim"))
         items.append(Text(self._status_line(), style="dim"))
         return Group(*items)
 
     def _tool_line(self, run: _ToolRun) -> Text:
         if run.status == "running":
             return Text.assemble(
-                (self._spinner(), "cyan"),
-                (" ", ""),
-                (run.name, "bold cyan"),
-                (f" {run.args_summary}" if run.args_summary else "", "dim"),
+                (f"{self._spinner()} ", "cyan"),
+                (run.headline, "bold cyan"),
             )
         if run.status == "error":
             return Text.assemble(
-                ("✗ ", "red"),
-                (run.name, "bold"),
+                ("● ", "red"),
+                (run.headline, "bold red"),
                 (f" ({tr(self._locale, 'tool_error')})", "red"),
             )
-        meta = self._result_meta(run)
-        return Text.assemble(
-            ("✓ ", "green"),
-            (run.name, "bold"),
-            (f" ({meta})" if meta else "", "dim"),
-        )
+        return Text.assemble(("● ", "green"), (run.headline, "bold"))
 
-    def _tool_result_line(self, run: _ToolRun) -> str:
+    def _output_line(self, run: _ToolRun) -> str:
+        """The ``⎿`` line under a finished call."""
+        summary: OutputLine = render_output(run.output)
         if run.status == "error":
-            return f"✗ {run.name} ({tr(self._locale, 'tool_error')})"
-        meta = self._result_meta(run)
-        return f"✓ {run.name} ({meta})" if meta else f"✓ {run.name}"
+            if summary.text:
+                return f"  ⎿ {summary.text}"
+            return f"  ⎿ {tr(self._locale, 'tool_error')}"
+        if not summary.text:
+            return f"  ⎿ {tr(self._locale, 'tool_no_output')}"
+        # Only a terminal has a key to press, and only cut output has more
+        # to show. A hint that is always there stops meaning anything.
+        show_hint = summary.truncated and self.console.is_terminal
+        hint = tr(self._locale, "tool_expand_hint") if show_hint else ""
+        return f"  ⎿ {summary.text}{hint}"
 
     def _result_meta(self, run: _ToolRun) -> str:
         parts = []
@@ -289,9 +384,7 @@ class RichInteractiveRenderer:
                 (run for run in self._tool_runs.values() if run.status == "running"),
                 None,
             )
-            label = f"{run.name} {run.args_summary}".rstrip() if run else tr(
-                self._locale, "thinking"
-            )
+            label = run.headline if run else tr(self._locale, "thinking")
         else:
             label = tr(self._locale, "thinking")
         parts = [f"{self._spinner()} {label}"]
@@ -311,10 +404,6 @@ class RichInteractiveRenderer:
 
     def _spinner(self) -> str:
         return SPINNER_FRAMES[self._spinner_idx % len(SPINNER_FRAMES)]
-
-    def _summarize_args(self, args: Any) -> str:
-        summary = " ".join(str(args).split())
-        return summary[:ARG_SUMMARY_MAX] + "…" if len(summary) > ARG_SUMMARY_MAX else summary
 
     def _is_error(self, output: str) -> bool:
         return output.lstrip().lower().startswith("error")

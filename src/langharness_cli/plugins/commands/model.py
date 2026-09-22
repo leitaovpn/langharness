@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from pelix.ipopo.decorators import ComponentFactory, Property, Provides
 
 from langharness_cli.common.i18n import tr
@@ -33,8 +35,17 @@ class ModelCommandPlugin:
                 name="model",
                 help=tr(self._locale, "help_model"),
                 handler=self._switch,
+                complete=self._complete,
             )
         ]
+
+    @staticmethod
+    def _complete(
+        context: InteractiveCommandContext, words: Sequence[str], prefix: str
+    ) -> list[str]:
+        """Offer the configured providers; `/model` accepts nothing else."""
+        del words, prefix
+        return context.list_providers()
 
     def _switch(self, context: InteractiveCommandContext, line: str) -> bool:
         name = line.strip()

@@ -15,6 +15,21 @@ from websockets.sync.client import connect
 
 ROOT = Path(__file__).resolve().parent.parent
 
+#: Grace for the auto-shutdown tests. It has to dwarf everything a test does
+#: before its first client lands -- server boot, the 0.1s health poll, two
+#: websocket handshakes -- because the registry arms the timer at lifespan
+#: startup, before uvicorn accepts anything. See
+#: docs/problem/2026-09-21-auto-shutdown-grace-race.md: at 0.3s the window was
+#: spent before the test could use it, and the attach then failed with an HTTP
+#: 500 from uvicorn's shutdown drain, or a refused connection. The lifecycle
+#: semantics have nothing to do with sub-second timing, so nothing is gained
+#: by running the window this close to the edge.
+GRACE = 2.0
+
+#: How long to wait to watch a grace window go by. It has to outlast GRACE, or
+#: an assertion about the server still being up checks nothing at all.
+GRACE_ELAPSED = GRACE + 0.5
+
 
 def free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -94,14 +109,14 @@ def stop_process(process: subprocess.Popen) -> None:
 
 def test_server_exits_after_last_client_leaves(tmp_path: Path) -> None:
     port = free_port()
-    process = spawn_server(tmp_path, port, auto_shutdown=True, grace=0.3)
+    process = spawn_server(tmp_path, port, auto_shutdown=True, grace=GRACE)
     try:
         wait_for_health(f"http://127.0.0.1:{port}")
         first = attach_client(port)
         second = attach_client(port)
 
         first.close()
-        time.sleep(0.8)  # grace elapsed; one client still attached
+        time.sleep(GRACE_ELAPSED)  # grace elapsed; one client still attached
         assert process.poll() is None
 
         second.close()
@@ -112,7 +127,7 @@ def test_server_exits_after_last_client_leaves(tmp_path: Path) -> None:
 
 def test_new_client_during_grace_cancels_shutdown(tmp_path: Path) -> None:
     port = free_port()
-    process = spawn_server(tmp_path, port, auto_shutdown=True, grace=0.5)
+    process = spawn_server(tmp_path, port, auto_shutdown=True, grace=GRACE)
     try:
         wait_for_health(f"http://127.0.0.1:{port}")
         first = attach_client(port)
@@ -120,7 +135,7 @@ def test_new_client_during_grace_cancels_shutdown(tmp_path: Path) -> None:
 
         time.sleep(0.1)  # still within the grace window
         second = attach_client(port)
-        time.sleep(0.8)  # grace would have elapsed
+        time.sleep(GRACE_ELAPSED)  # grace would have elapsed
         assert process.poll() is None
 
         second.close()

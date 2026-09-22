@@ -33,5 +33,22 @@ class WorkspaceToolsPlugin:
         )
         return [*file_tools, bash]
 
+    def get_tool_presentations(self) -> dict[str, str]:
+        """How each call reads in the CLI transcript.
+
+        The file tools come from LangChain's toolkit and use snake_case
+        argument names, so their templates name those exact keys.
+        """
+        return {
+            "read_file": "Read({file_path})",
+            "write_file": "write_file({file_path})",
+            "list_directory": "list_directory({dir_path})",
+            "file_search": "file_search({pattern})",
+            "move_file": "move_file({source_path} → {destination_path})",
+            "copy_file": "copy_file({source_path} → {destination_path})",
+            "file_delete": "file_delete({file_path})",
+            "bash": "Bash({commands})",
+        }
+
     def get_plugin_info(self) -> dict[str, str]:
         return {"name": self._plugin_name, "version": self._plugin_version}

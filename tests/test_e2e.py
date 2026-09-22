@@ -187,6 +187,7 @@ def test_plugin_lifecycle_and_agent_invocation(
     try:
         loop = manager.get_service(SPEC_AGENT_LOOP)
         assert loop.describe()["tools"] == ["add"]
+        assert loop.describe()["tool_headlines"] == {"add": "add({a}, {b})"}
 
         result = loop.invoke("What is 2 + 3?")
         assert result["messages"][-1].content == "The answer is 5."
@@ -200,9 +201,12 @@ def test_plugin_lifecycle_and_agent_invocation(
         tools_instance = manager.list_instance(factory="tools-plugin-factory")[0]
         manager.update_instance(tools_instance.instance, enabled=False)
         assert loop.describe()["tools"] == []
+        # Headlines follow the enabled providers, not a static table.
+        assert loop.describe()["tool_headlines"] == {}
 
         manager.update_instance(tools_instance.instance, enabled=True)
         assert loop.describe()["tools"] == ["add"]
+        assert loop.describe()["tool_headlines"] == {"add": "add({a}, {b})"}
 
         middleware_factory = "middleware-plugin-factory"
         manager.delete_instance(

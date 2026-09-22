@@ -6,19 +6,23 @@ import json
 import os
 import sys
 from collections.abc import Iterable, Mapping
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 import httpx
 from prompt_toolkit import PromptSession
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
-from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.completion import Completer
 from prompt_toolkit.history import FileHistory, History, InMemoryHistory
+from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.shortcuts import CompleteStyle
-from prompt_toolkit.styles import Style
 
+from langharness_cli.common.completion import ArgumentSource, PaletteCompleter
 from langharness_cli.common.i18n import tr
 from langharness_cli.common.session import DEFAULT_AGENT_ID, DEFAULT_USER_ID
+from langharness_cli.common.theme import build_palette_style
+from langharness_cli.common.toolview import render_headline
 from langharness_cli.contracts import InteractiveCommandSpec, InteractiveRenderer
 from langharness_cli.plugins.rich_renderer import RichInteractiveRenderer
 
@@ -61,6 +65,10 @@ class InteractiveCLIRunner:
         self.user_id = user_id
         self.agent_id = agent_id
         self.session_id = session_id
+        self._tool_headlines: dict[str, dict[str, str]] = {}
+        #: Whether the detail pane is open; owned here because the prompt is
+        #: the only thing that can draw and retract it.
+        self._expanded = False
         self._update_model_status()
         self.commands: Mapping[str, InteractiveCommandSpec] = {
             command.name: command for command in commands
@@ -76,28 +84,63 @@ class InteractiveCLIRunner:
             self._session = PromptSession(
                 history=history,
                 auto_suggest=AutoSuggestFromHistory(),
-                style=Style.from_dict(
-                    {
-                        "prompt": "bold ansicyan",
-                        "bottom-toolbar": "bg:#222222 #aaaaaa",
-                    }
-                ),
+                style=build_palette_style(),
+                key_bindings=self._key_bindings(),
             )
+
+    def _key_bindings(self) -> KeyBindings:
+        """Shell-level keys, which win over prompt_toolkit's defaults.
+
+        ctrl+o is taken from readline's operate-and-get-next. The transcript
+        is the thing worth acting on here, and that binding is obscure enough
+        to be worth the trade.
+        """
+        bindings = KeyBindings()
+
+        @bindings.add("c-o")
+        def _expand(event: Any) -> None:
+            """Open the detail pane, or close it again.
+
+            Nothing is printed here on purpose. The pane is part of the
+            prompt's own layout, so prompt_toolkit draws it and erases it; a
+            print would land in the scrollback and stay there, which is
+            exactly what made this key one-way.
+            """
+            self._expanded = not self._expanded
+            event.app.invalidate()
+
+        return bindings
+
+    def _toolbar(self) -> str:
+        """What prompt_toolkit draws under the input line.
+
+        A callable, not a string: prompt_toolkit reads it on every repaint,
+        which is what lets the detail appear and disappear while the prompt
+        stays up.
+        """
+        status = (
+            self.renderer.get_status_text()
+            if hasattr(self.renderer, "get_status_text")
+            else f" {self.model} · {tr(self.locale, 'toolbar_hint')} "
+        )
+        if not self._expanded:
+            return status
+        # Detail above, status line at the bottom where a status line belongs.
+        return f"{self.renderer.expansion_text()}\n{status}"
 
     def cmdloop(self, intro: str | None = None) -> None:
         self.renderer.show_welcome(intro or tr(self.locale, "intro"))
-        if hasattr(self.renderer, "get_status_text"):
-            toolbar: Any = self.renderer.get_status_text
-        else:
-            toolbar = f" {self.model} · {tr(self.locale, 'toolbar_hint')} "
         while True:
+            # The pane describes the prompt it was opened at, so each new one
+            # starts closed -- including after a cancelled prompt.
+            self._expanded = False
             try:
                 line = (
                     self._session.prompt(
                         [("class:prompt", self.prompt)],
                         completer=self._command_completer(),
-                        complete_style=CompleteStyle.MULTI_COLUMN,
-                        bottom_toolbar=toolbar,
+                        complete_style=CompleteStyle.COLUMN,
+                        bottom_toolbar=self._toolbar,
                     )
                     if self._interactive_input and self._session is not None
                     else input(self.prompt)
@@ -111,17 +154,26 @@ class InteractiveCLIRunner:
             if self.onecmd(line):
                 return
 
-    def _command_completer(self) -> WordCompleter:
-        return WordCompleter(
-            [f"/{name}" for name in sorted(self.commands)],
-            meta_dict={
-                f"/{name}": command.help for name, command in self.commands.items()
-            },
-            sentence=True,
-        )
+    def _command_completer(self) -> Completer:
+        return PaletteCompleter(self.commands, self._argument_sources())
+
+    def _argument_sources(self) -> Mapping[str, ArgumentSource]:
+        """Completers the command plugins declared, bound to this runner.
+
+        The shell owns no grammar of its own: each command hands in a callable
+        next to the handler that consumes the same arguments. Sources answer
+        from local state only, so a candidate never blocks the keystroke on a
+        server round trip.
+        """
+        return {
+            name: partial(spec.complete, self)
+            for name, spec in self.commands.items()
+            if spec.complete is not None
+        }
 
     def do_stream(self, line: str) -> None:
         self.renderer.start_response()
+        self._tool_headlines.clear()
         payload: dict[str, Any] = {
             "input": line,
             "model": self.model,
@@ -167,7 +219,9 @@ class InteractiveCLIRunner:
                             self._build_approval_decisions(action_requests, choice)
                         )
                         continue
-                    self.renderer.render_event(event)
+                    self.renderer.render_event(
+                        self._with_headline(event)
+                    )
         except (httpx.HTTPError, json.JSONDecodeError) as exc:
             self.renderer.show_error(str(exc))
         except KeyboardInterrupt:
@@ -215,7 +269,7 @@ class InteractiveCLIRunner:
             for line_text in response.iter_lines():
                 event = json.loads(line_text)
                 if not self._apply_session_event(event):
-                    self.renderer.render_event(event)
+                    self.renderer.render_event(self._with_headline(event))
 
     def _apply_session_event(self, event: Mapping[str, Any]) -> bool:
         if event.get("type") != "session":
@@ -309,6 +363,50 @@ class InteractiveCLIRunner:
     def refresh_status(self) -> None:
         """Re-render the status toolbar after identity changes."""
         self._update_model_status()
+
+    def _headlines_for(self, agent_id: str) -> dict[str, str]:
+        """Tool templates for one agent, fetched at most once per response.
+
+        A failed lookup is cached as empty so an unreachable server costs one
+        attempt rather than one per tool call; the cache is dropped at the
+        start of each response.
+        """
+        if agent_id not in self._tool_headlines:
+            self._tool_headlines[agent_id] = self._fetch_headlines(agent_id)
+        return self._tool_headlines[agent_id]
+
+    def _fetch_headlines(self, agent_id: str) -> dict[str, str]:
+        try:
+            response = httpx.get(
+                f"{self.base_url}/agents/{agent_id}/tools",
+                headers={"Authorization": f"Bearer {self.token}"},
+                timeout=5.0,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, json.JSONDecodeError):
+            return {}
+        return {
+            str(entry.get("name", "")): str(entry.get("headline", ""))
+            for entry in payload.get("tools") or []
+            if entry.get("name") and entry.get("headline")
+        }
+
+    def _with_headline(self, event: dict[str, Any]) -> dict[str, Any]:
+        """Stamp the rendered headline onto a tool_call event.
+
+        The renderer reads ``headline`` and never learns that templates
+        exist, so a command's presentation stays out of its way.
+        """
+        if event.get("type") != "tool_call":
+            return event
+        template = self._headlines_for(self.agent_id).get(str(event.get("name", "")))
+        if not template:
+            return event
+        rendered = render_headline(template, event.get("args") or {})
+        if rendered:
+            event["headline"] = rendered
+        return event
 
     def _update_model_status(self) -> None:
         if not hasattr(self.renderer, "set_model"):
