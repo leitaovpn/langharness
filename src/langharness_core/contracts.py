@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -29,6 +30,8 @@ SPEC_SESSION_INDEX = "session.index"
 SPEC_AGENT_REGISTRY = "agent.registry"
 SPEC_AGENT_DIRECTORY = "agent.directory"
 SPEC_AGENT_SERVER = "agent.server"
+SPEC_PROMPT_SECTION = "agent.plugin.prompt_section"
+SPEC_WORKSPACE = "agent.plugin.workspace"
 ModelProtocol = Literal["anthropic", "chat", "responses"]
 
 ALL_PLUGIN_SPECS = (
@@ -47,11 +50,43 @@ ALL_PLUGIN_SPECS = (
     SPEC_NAME,
     SPEC_CACHE,
     SPEC_TRANSFORMERS,
+    SPEC_PROMPT_SECTION,
+    SPEC_WORKSPACE,
     SPEC_AGENT_LOOP,
     SPEC_SESSION_INDEX,
     SPEC_AGENT_REGISTRY,
     SPEC_AGENT_DIRECTORY,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class PromptSection:
+    """One ordered, named contribution to an agent's system prompt.
+
+    ``order`` decides placement (smaller first), ``source`` is free-form
+    provenance recorded in the per-request trace, and ``max_bytes`` caps this
+    section alone on top of the assembler's total budget.
+    """
+
+    name: str
+    order: int
+    text: str
+    source: str
+    max_bytes: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PromptContext:
+    """What a section provider may use to shape its contribution.
+
+    ``touched_paths`` are workspace-relative POSIX paths the conversation's
+    tool calls have already named, which is what lets a provider decide how
+    deep into a repository its instructions must reach.
+    """
+
+    workspace: str
+    touched_paths: tuple[str, ...] = ()
+    model: str | None = None
 
 
 @service_contract(SPEC_LLM)
@@ -94,6 +129,26 @@ class SystemPromptProvider(Protocol):
     """Contract implemented by every ``agent.plugin.system_prompt`` service."""
 
     def get_system_prompt(self) -> str: ...
+
+    def get_plugin_info(self) -> dict[str, str]: ...
+
+
+@service_contract(SPEC_PROMPT_SECTION)
+@runtime_checkable
+class PromptSectionProvider(Protocol):
+    """Contract implemented by every ``agent.plugin.prompt_section`` service."""
+
+    def get_prompt_sections(self, context: PromptContext) -> list[PromptSection]: ...
+
+    def get_plugin_info(self) -> dict[str, str]: ...
+
+
+@service_contract(SPEC_WORKSPACE)
+@runtime_checkable
+class WorkspaceProvider(Protocol):
+    """Contract implemented by every ``agent.plugin.workspace`` service."""
+
+    def get_workspace(self) -> str: ...
 
     def get_plugin_info(self) -> dict[str, str]: ...
 

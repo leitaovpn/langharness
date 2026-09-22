@@ -115,10 +115,12 @@ from langharness_core.contracts import (
     PromptSection,
     PromptSectionProvider,
 )
-from langharness_plugin.validation import CONTRACTS, validate
+from langharness_plugin.validation import contract_for, validate
 
 
-class Conforming:
+class ConformingProvider:
+    """Smallest service that satisfies the prompt-section contract."""
+
     def get_prompt_sections(self, context: PromptContext) -> list[PromptSection]:
         return [
             PromptSection(
@@ -131,21 +133,25 @@ class Conforming:
 
 
 class MissingPluginInfo:
+    """Violates the contract by omitting ``get_plugin_info``."""
+
     def get_prompt_sections(self, context: PromptContext) -> list[PromptSection]:
         return []
 
 
 def test_specification_is_pinned_to_the_protocol() -> None:
-    assert CONTRACTS[SPEC_PROMPT_SECTION] is PromptSectionProvider
+    assert contract_for(SPEC_PROMPT_SECTION) is PromptSectionProvider
     assert SPEC_PROMPT_SECTION in ALL_PLUGIN_SPECS
-    assert PromptSectionProvider.__SPECIFICATION__ == SPEC_PROMPT_SECTION
-    # The pin must not live in the class body: that would pollute
-    # __protocol_attrs__ and break isinstance.
-    assert "__SPECIFICATION__" not in PromptSectionProvider.__protocol_attrs__
+
+
+def test_pin_does_not_pollute_protocol_members() -> None:
+    assert "__SPECIFICATION__" not in getattr(
+        PromptSectionProvider, "__protocol_attrs__"
+    )
 
 
 def test_conforming_provider_has_no_violations() -> None:
-    assert validate(Conforming(), PromptSectionProvider) == ()
+    assert validate(ConformingProvider(), PromptSectionProvider) == ()
 
 
 def test_missing_method_is_reported() -> None:
@@ -155,7 +161,7 @@ def test_missing_method_is_reported() -> None:
 
 
 def test_isinstance_works_against_the_protocol() -> None:
-    assert isinstance(Conforming(), PromptSectionProvider)
+    assert isinstance(ConformingProvider(), PromptSectionProvider)
 
 
 def test_prompt_section_defaults_to_no_per_section_budget() -> None:
