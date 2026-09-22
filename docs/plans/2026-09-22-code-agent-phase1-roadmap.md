@@ -1,10 +1,11 @@
 # Code Agent Phase 1 开发路线图
 
 > 本文是 `docs/designs/2026-09-22-code-agent-design.md` 第 11 节 Phase 1 的落地方案拆分。
-> Phase 1 覆盖 4 个独立子系统，单个计划无法在合理篇幅内保持可执行性，因此按
-> "每个计划结束时都有可独立验收的软件" 拆成 3 个顺序子计划。
+> Phase 1 覆盖多个独立子系统，单个计划无法在合理篇幅内保持可执行性，因此按
+> "每个计划结束时都有可独立验收的软件" 拆成 5 个子计划：1、2a、2b、3a、3b。
+> 其中 1 / 2a / 3a 已完成，2b / 3b 尚未开始。
 
-## 为什么拆成 3 个
+## 为什么拆开
 
 设计第 11 节把 Phase 1 列为一组 bullet，但它们之间的耦合方向是单一的：
 
@@ -21,17 +22,20 @@ workspace/exec ┘
   `goal-round` / `goal-wrapup`，`mutation_generation` 来自 workspace/exec 工具），
   必须最后做。
 
-反向依赖不存在，所以三个计划可以严格顺序执行，每个都以一次 `make check` 通过
+反向依赖不存在，所以这些计划可以严格顺序执行，每个都以一次 `make check` 通过
 和一组新测试收尾。
 
 ## 计划清单
 
 | 序号 | 计划 | 交付物 | 状态 |
 |---:|---|---|---|
-| 1 | `docs/plans/2026-09-22-code-agent-prompt-sections-plan.md` | agent loop 在每个 model step 用有序、具名、带预算的 sections 组装 system prompt；`AGENTS.md` 按 workspace→目标路径逐层注入并按 hash 失效 | 已可执行（8 个任务，含逐步代码与测试） |
-| 2a | `docs/plans/2026-09-22-code-agent-workspace-tools-plan.md` | 受 workspace realpath 约束的 `list_directory` / `read_file` / `search_text` / `apply_patch` / `workspace_status`，以及 `ToolError` 与 mutation generation | 已可执行（8 个任务） |
-| 2b | 尚未成文 | 有 deadline、输出上限、环境白名单、后台 job 归属的命令执行：`exec_command` / `write_stdin` / `wait_job` / `stop_job` | 骨架见本文；开始前按同一流程写成独立计划文件 |
-| 3 | 尚未成文 | 持久化 goal 状态机、验证门禁、自动续跑控制器、`code` preset 与新的流事件 | 骨架见本文；开始前按同一流程写成独立计划文件 |
+| 1 | `docs/plans/2026-09-22-code-agent-prompt-sections-plan.md` | agent loop 在每个 model step 用有序、具名、带预算的 sections 组装 system prompt；`AGENTS.md` 按 workspace→目标路径逐层注入并按 hash 失效 | **已完成**（8 个任务） |
+| 2a | `docs/plans/2026-09-22-code-agent-workspace-tools-plan.md` | 受 workspace realpath 约束的 `list_directory` / `read_file` / `search_text` / `apply_patch` / `workspace_status`，以及 `ToolError` 与 mutation generation | **已完成**（8 个任务） |
+| 2b | 尚未成文 | 有 deadline、输出上限、环境白名单、后台 job 归属的命令执行：`exec_command` / `write_stdin` / `wait_job` / `stop_job` | 骨架见本文；未开始 |
+| 3a | `docs/plans/2026-09-22-code-agent-goal-plan.md` | 持久化 goal 状态机（revision CAS）、宿主验证器、6 条完成门禁、`get_goal` / `finish_goal` | **已完成**（6 个任务） |
+| 3b | 尚未成文 | run controller 自动续跑、`ask_user` / `awaiting_user`、新流事件、`code` preset 装配、三协议 e2e、真实模型临时仓库验收 | 骨架见本文；未开始 |
+
+**Phase 1 = 1 + 2a + 2b + 3a + 3b。** 已完成 3 个，未开始 2 个。
 
 **为什么把原计划 2 拆成 2a / 2b**：两者只共享 `ToolError` 与 mutation
 generation（都由 2a 引入），其余部分是独立子系统——文件路径安全与补丁原子性是
@@ -50,152 +54,142 @@ generation（都由 2a 引入），其余部分是独立子系统——文件路
    `search_text` 的纯 Python 实现是主路径，ripgrep 只是存在时的加速分支，
    两条路径都必须测到。
 
-计划 2b 与计划 3 的计划文件在各自开工时创建（命名沿用
+计划 2b 与 3b 的计划文件在各自开工时创建（命名沿用
 `YYYY-MM-DD-<feature>-plan.md`），本文只固定范围、依赖与验收，不预先占用文件名。
 
-Phase 2（PTC presentation）与 Phase 3（OS sandbox、reviewer、web/skills/delivery）
-不在本轮范围内，待 Phase 1 三个计划全部落地后按同一流程单独设计。
-
-## 测试策略（三个计划共同）
+## 测试策略（各计划共同）
 
 设计第 12 节要求真实模型 smoke test 只作为补充。因此每个计划都遵循同一分层：
 
 1. **纯逻辑单测**：不启动 Pelix，直接对 resolver / assembler / 状态机断言；
 2. **真实 Pelix e2e**：用 `PluginManager` + fake model 验证 scope 不串、事件顺序、
    graph 重建行为；
-3. **真实模型 smoke**：只在计划 3 收尾建一个 fixture 临时仓库 + `real_llm` marker
-   的验收任务（`.pytest.ini` 已注册 `real_llm` marker，默认 skip）。
+3. **真实模型 smoke**：只在 3b 收尾建一个 fixture 临时仓库 + `real_llm` marker
+   的验收任务（`pyproject.toml` 已注册 `real_llm` marker，默认 skip）。
 
 fake-model 确定性测试是门禁，真实模型验收是补充，两者不可互相替代。
 
 ---
 
-## 计划 2 骨架：code workspace 与 exec/jobs 工具
+## 计划 2b 骨架：命令执行与 job 控制
 
-**目标**：让 code agent 能在 workspace 边界内读取、搜索、打补丁，并运行命令、
-测试、lint，且执行证据结构化可查。
+**目标**：让 code agent 自己运行命令、测试与 lint，并有 deadline、输出上限、
+环境白名单与后台 job 归属。2a 已经把"读、搜、改"做完了，本计划只补"跑"。
 
-**依赖**：计划 1 的 `WorkspaceProvider`（`agent.plugin.workspace`）。
+**依赖**：计划 2a 的 `WorkspaceProvider`、`WorkspaceStateProvider`（mutation
+generation）、`tool_error()`、`resolve_workspace_path()`；计划 3a 的
+`ProjectVerifier`（它的 argv 执行与 digest 逻辑应抽成共享实现，两处复用）。
 
 **新增契约**（`src/langharness_core/contracts.py`）：
 
-- `SPEC_JOB_MANAGER` / `JobManagerProvider`：后台 job 的创建、写入、等待、终止。
-- `ToolError` / `ToolResult` 值类型：统一 `{code, message, retryable, details}`，
-  异常不得以 Python traceback 形式回流给模型。
+- `SPEC_JOB_MANAGER` / `JobManagerProvider`：job 的创建、写入、等待、终止、列举。
+- `JobRecord` 值类型：`id`、`command`、`cwd`、`pid`、`state`、`started_at`、
+  `exit_code`、`owner`（`agent_id + session_id`）。
 
 **新增文件**：
 
-- `src/langharness_core/plugins/workspace/paths.py`：realpath 固定、`root_dir`
-  约束、symlink escape 拒绝（计划 1 已在 instructions resolver 里实现同一判据，
-  本计划抽取为共享实现并让两处复用）。
-- `src/langharness_core/plugins/tools/code_workspace.py`：`list_directory`、
-  `read_file`、`search_text`、`workspace_status`、`apply_patch`。
-- `src/langharness_core/plugins/tools/patch.py`：补丁解析与原子应用。
 - `src/langharness_core/plugins/exec/command.py`：`exec_command`。
 - `src/langharness_core/plugins/exec/jobs.py`：`write_stdin`、`wait_job`、`stop_job`。
-- `src/langharness_core/plugins/workspace/generation.py`：`mutation_generation` 计数器。
-
-**补丁格式**（计划 1 的 `touched_paths_from_messages` 已按此格式解析，计划 2 必须
-使用同一组标记）：
-
-```text
-*** Begin Patch
-*** Update File: src/a.py
-@@ <context>
--old
-+new
-*** Add File: src/b.py
-+content
-*** Delete File: src/c.py
-*** End Patch
-```
+- `src/langharness_core/plugins/exec/runner.py`：被 verifier 与本计划共用的
+  argv 执行器（进程组、deadline、输出上限、环境白名单）。
 
 **任务骨架**：
 
-1. `ToolError` / `ToolResult` 值类型 + 契约，含序列化测试。
-2. workspace 路径约束共享实现（realpath、穿越、symlink），含两个 agent 不同
-   workspace 的 scope e2e。
-3. `list_directory` / `read_file`：结构化输出、行范围、内容 hash、截断标记。
-4. `search_text`：ripgrep 优先、无 ripgrep 时纯 Python 回退、结果数量上限。
-5. `apply_patch`：解析 V4A 风格补丁、原子应用（失败不部分写）、before/after hash、
-   `wrong_generation` 冲突拒绝。
-6. `workspace_status`：git 状态、区分 agent 改动与用户既有改动。
-7. `mutation_generation`：写工具与 shell 命令结束后递增；只读工具不递增。
-8. `exec_command`：cwd 必须在 workspace realpath 之下、独立进程组、deadline
-   120s/上限 600s、stdout/stderr 分流与总输出限额、环境白名单。
-9. job 控制：`write_stdin` / `wait_job` / `stop_job`，ownership 绑定
-   `agent_id + session_id`，取消时终止整个进程组。
+1. `JobManagerProvider` 契约与 `JobRecord`，含序列化测试。
+2. 共享 argv 执行器：独立进程组、deadline、stdout/stderr 分流与总输出限额、
+   环境白名单（不继承 `*_API_KEY` 等秘密）；把 `ProjectVerifier` 改成调用它。
+3. `exec_command`：cwd 必须落在 workspace realpath 之下、默认 deadline 120s /
+   上限 600s、前台/后台明确、返回 exit code 与耗时。
+4. job 归属与生命周期：绑定 `agent_id + session_id`，取消/超时终止**整个进程组**。
+5. `write_stdin` / `wait_job` / `stop_job`，`wait_job` 的等待不得超过交互更新周期。
+6. mutation generation：设计第 6.4 节要求**保守地把所有 shell 命令视作可能修改
+   workspace**，因此每条命令结束后都递增（只读与否不由模型声明决定）。
+7. 新流事件 `job_started` / `job_output` / `job_finished` 贯通到 loop（API 已是
+   原样透传，CLI renderer 已声明忽略未知事件，因此只需 loop 侧发出）。
+8. catalog 装配（`plugins/exec/...` 两个条目）与两个 agent 的 job 不串 scope 的 e2e。
 
-**验收**：fake-model 下路径穿越与 symlink escape 均被拒；补丁失败后文件字节不变；
-超时后进程组无残留；输出超限被结构化标记；两个 agent 的 workspace 不互相可见。
-真实模型 smoke 并入计划 3 的 fixture 仓库验收。
+**验收**：fake-model 下超时后进程组无残留；输出超限被结构化标记且不撑爆上下文；
+环境变量里没有宿主秘密；`wait_job` 不会阻塞事件循环；两个 agent 的 job 互不可见；
+`exec_command` 写文件后 mutation generation 递增，因而此前的验证报告失效。
 
 ---
 
-## 计划 3 骨架：goal、验证门禁与 run controller
+## 计划 3b 骨架：run controller、流事件与 code preset
 
-**目标**：把"模型停止调用工具"与"用户目标完成"彻底分开：只有 `finish_goal`
-提交证据并通过宿主确定性检查，goal 才进入 `complete`。
+**目标**：把"模型停止调用工具"与"用户目标完成"接起来——turn 静止但 goal 仍
+`active` 时自动续跑，直到 complete / blocked / cancelled 或达到预算。
 
-**依赖**：计划 1 的 prompt section 体系与 `WorkspaceProvider`；计划 2 的
-`mutation_generation` 与 exec 工具。
+**依赖**：计划 3a 的 `GoalProvider`、`VerificationProvider`、`evaluate_completion`；
+计划 2a 的 `WorkspaceStateProvider`。
+
+**注意：3a 已经交付的部分不要重做** —— goal 值类型与 SQLite CAS 存储、6 条完成
+门禁、`ProjectVerifier`、`get_goal` / `finish_goal` 都已完成。
 
 **新增契约**：
 
-- `SPEC_GOAL` / `GoalProvider`：goal 的创建、读取、CAS 更新。
 - `SPEC_RUN_CONTROLLER` / `RunControllerProvider`：graph 静止后的决策。
-- `SPEC_VERIFIER` / `VerificationProvider`：执行验证策略并签发
-  `VerificationReport`。
+- 决策值类型：`Continue(message)` / `AwaitUser(reason)` / `Stop(status, wrapup_context)`。
 
 **新增文件**：
 
-- `src/langharness_core/plugins/goals/model.py`：`Goal`、`VerificationReport` 值类型。
-- `src/langharness_core/plugins/goals/sqlite.py`：goal 持久化，revision CAS。
-- `src/langharness_core/plugins/goals/tools.py`：`get_goal`、`finish_goal`、`ask_user`。
-- `src/langharness_core/plugins/verifier/project.py`：按 argv 数组执行门禁命令、
-  计算 artifact hash、校验 report 的 `mutation_generation` 新鲜度。
-- `src/langharness_core/plugins/controller/goal_round.py`：单步 RunController。
-- `src/langharness_core/prompts/code_agent/goal_round.md`、`goal_wrapup.md`。
+- `src/langharness_core/plugins/controller/goal_round.py`：`GoalRoundController`。
+- `src/langharness_core/prompts/code_agent/goal_round.md`、`goal_wrapup.md`
+  （order 9000，设计第 5.1 节已为它们留好位置）。
+- `src/langharness_core/plugins/goals/verify_tool.py`：**独立的 `verify` 工具**。
 
-**loop 扩展**（`_rebuild` 之外，`astream` 内部）：
+**一个被漏掉的缺口**：设计第 6.1 节的工具表里，`verify` 与 `finish_goal` 是
+**两个**工具——`verify` 让 agent 在提交完成前先跑一遍门禁、拿到报告 id 与 generation
+（"宿主执行完成门禁"）。3a 只实现了 `finish_goal` 内部顺带验证，agent 没有"先查
+再交"的手段，只能盲目提交再读拒绝原因。本计划需要补上它。
+
+**loop 扩展**（`astream` 内部）：
 
 - graph 一次运行静止后调用绑定到的 `RunControllerProvider`；
-- 返回 `Continue(message)` / `AwaitUser(reason)` / `Stop(status, wrapup_context)`；
-- `active` 时写 checkpoint、追加带 `goal id/revision/round` 的合成 follow-up 再跑一轮；
+- `active` 时用同一 `thread_id` 追加带 `goal id/revision/round` 的合成 follow-up 再跑
+  一轮（**依赖 checkpointer**：没有 checkpointer 时续跑会从头开始，必须显式拒绝并说明）；
+- `awaiting_user` 时停止自动运行，等真实用户输入；
+- `complete` / `blocked` / `cancelled` 时只允许一个收尾 model step；
+- 达到 `max_rounds` 由宿主直接转 `blocked(reason="round-limit")`；
 - 新流事件：`goal_started`、`goal_round_started`、`goal_status`、
-  `verification_started`、`verification_result`、`job_started`、`job_output`、
-  `job_finished`；现有事件保持兼容。
-
-**完成门禁**（设计第 8.3 节 6 条全部实现为宿主侧确定性检查，任一失败即拒绝完成
-并把拒绝原因作为 tool result 返回）：
-
-1. goal 存在且 revision 匹配；
-2. artifact 可定位且记录 hash；
-3. 验证 report 的 `mutation_generation` 等于 workspace 当前代次；
-4. 必选检查退出码为 0（本仓库为 `make check`）且 `git diff --check` 通过；
-5. 每条 acceptance criterion 都有证据映射（tool call / 文件 hash / 测试用例 /
-   显式声明 `manual/user_review`）；
-6. 无未决审批、无 agent 自己的活动 job。
+  `verification_started`、`verification_result`。
 
 **任务骨架**：
 
-1. `Goal` / `VerificationReport` 值类型与 JSON 往返，含 `goal_revision` 字段。
-2. SQLite goal store：revision CAS、`rounds_started`、`blocker_history`、预算字段。
-3. `ProjectVerifier`：argv 执行、退出码、时长、stdout digest、artifact hash。
-4. `finish_goal` 门禁：6 条检查逐条一个失败测试，另一条全通过的测试。
-5. `get_goal` / `ask_user` 工具。
-6. `GoalRoundController` 状态机（active / awaiting_user / verifying / complete /
-   blocked / cancelled），含 round limit 与连续阻塞阈值。
-7. loop 集成：turn 静止但 goal active 时自动续跑；complete 后只产生一次收尾。
-8. 新流事件贯通到 API 与 CLI renderer。
-9. `code` preset：`AGENT_PLUGIN_CATALOG` 增加 preset 声明，agent 配置支持
+1. `RunControllerProvider` 契约与三个决策值类型。
+2. `ask_user` 工具与 `awaiting_user` 转移（设计第 6.1 节：只用于无法从仓库发现的
+   用户选择）。
+3. 独立的 `verify` 工具，复用 3a 的 verifier 与门禁。
+4. `GoalRoundController` 状态机（active / awaiting_user / verifying / complete /
+   blocked / cancelled），含 round limit 与预算。
+5. loop 集成：turn 静止但 goal active 时自动续跑；complete 后只产生**一次**收尾；
+   无 checkpointer 时拒绝续跑。
+6. `goal_round.md` / `goal_wrapup.md` 两个 prompt section。
+7. 新流事件贯通到 CLI renderer（API 侧已是透传）。
+8. `code` preset：`AGENT_PLUGIN_CATALOG` 增加 preset 声明，agent 配置支持
    `"preset": "code"`，`simple_agent` 行为不变。
-10. 真实 Pelix scope e2e：两个 agent 的 prompt、工具、workspace、goal 不串。
-11. 三协议 e2e：chat / anthropic / responses 的多工具 turn、error 事件、
+9. 真实 Pelix scope e2e：两个 agent 的 prompt、工具、workspace、goal **合起来**不串
+   （各自的专项 e2e 已分别在 1 / 2a / 3a 完成，这里只测组合）。
+10. 三协议 e2e：chat / anthropic / responses 的多工具 turn、error 事件、
     checkpoint 恢复。
-12. **fixture 临时仓库验收**：生成一个带失败测试的临时仓库，用真实模型跑
-    "修复 bug" 任务，断言 agent 读到 `AGENTS.md`、改了正确文件、跑了配置门禁、
-    且只在新鲜 report 通过后才完成。用 `real_llm` marker 标记，默认 skip。
+11. **fixture 临时仓库验收**：生成一个带失败测试的临时仓库，用真实模型跑"修复 bug"
+    任务，断言 agent 读到 `AGENTS.md`、改了正确文件、跑了配置门禁、且只在新鲜
+    report 通过后才完成。用 `real_llm` marker 标记，默认 skip。
 
 **验收**：设计第 11 节 Phase 1 场景 —— 在隔离临时仓库中修复一个带失败测试的 bug；
 验证失败时必须继续而不是输出"完成"。
+
+---
+
+## Phase 1 之后
+
+设计第 11 节的 Phase 2 / Phase 3 均未开始，也不在本轮拆分内：
+
+| 阶段 | 内容 | 关键约束 |
+|---|---|---|
+| Phase 2 | PTC presentation：`native \| ptc \| both` scoped presenter、从工具 schema 生成 typed SDK、`run_code` 隔离进程、直调阻断、子调用调度与审计、取消与资源限额 | 模式判据必须同时作用于 wire schema 与 dispatch authorization，不能只靠 prompt；`run_code` 不出现在程序内 SDK |
+| Phase 3 | OS sandbox provider、可选 reviewer agent、web/skills/delivery 工具、失败恢复、上下文压缩、跨进程 goal resume | 未配置真 sandbox 时 UI 与 tool result 必须显示 `isolation="process-only"`，不得声称"沙箱执行" |
+
+设计第 6.2 节列出的可选工具（`web_search` / `web_fetch` / `skill_list` /
+`skill_read` / `deliver_file`）归 Phase 3。设计第 6.3 节明确**不提供**的工具
+（无确认的 `file_delete`、`git commit` / `git push` 等外部副作用、读取全部环境
+变量的工具、任意绝对路径文件 API）不在任何后续阶段的计划里，除非设计改版。
