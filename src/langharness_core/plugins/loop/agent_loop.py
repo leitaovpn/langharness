@@ -24,11 +24,13 @@ from pelix.ipopo.decorators import (
     Validate,
 )
 
-from langharness_core.contracts import (
+from langharness_core.contracts import (  # noqa: I001 - grouped with the block above
     AgentLoopProvider,
+    AwaitUser,
     CacheProvider,
     CheckpointerProvider,
     ContextSchemaProvider,
+    Continue,
     DebugProvider,
     InterruptAfterProvider,
     InterruptBeforeProvider,
@@ -39,7 +41,10 @@ from langharness_core.contracts import (
     PromptSection,
     PromptSectionProvider,
     ResponseFormatProvider,
+    RunControllerProvider,
+    RunDecision,
     StateSchemaProvider,
+    Stop,
     StoreProvider,
     SystemPromptProvider,
     ToolProvider,
@@ -148,6 +153,9 @@ def _iter_interrupts(container: Any) -> Iterator[Any]:
 )
 @RequiresBest("_job_manager", JobManagerProvider, optional=True, immediate_rebind=True)
 @RequiresBest(
+    "_run_controller", RunControllerProvider, optional=True, immediate_rebind=True
+)
+@RequiresBest(
     "_response_format_provider",
     ResponseFormatProvider,
     optional=True,
@@ -202,6 +210,7 @@ def _iter_interrupts(container: Any) -> Iterator[Any]:
     "_prompt_section_providers",
     "_workspace_provider",
     "_job_manager",
+    "_run_controller",
     "_name_provider",
     "_response_format_provider",
     "_cache_provider",
@@ -223,6 +232,7 @@ class PluginAgentLoop:
         self._prompt_section_providers: list[Any] = []
         self._workspace_provider: Any = None
         self._job_manager: Any = None
+        self._run_controller: Any = None
         self._response_format_provider: Any = None
         self._state_schema_provider: Any = None
         self._context_schema_provider: Any = None
@@ -254,6 +264,9 @@ class PluginAgentLoop:
             ),
             "_job_manager": ContractGuard(
                 self, "_job_manager", JobManagerProvider
+            ),
+            "_run_controller": ContractGuard(
+                self, "_run_controller", RunControllerProvider
             ),
             "_response_format_provider": ContractGuard(
                 self, "_response_format_provider", ResponseFormatProvider
@@ -455,6 +468,19 @@ class PluginAgentLoop:
         self._guards[field].release(service)
         self._graph = None
 
+    @BindField("_run_controller", if_valid=True)
+    def _on_run_controller_bind(self, field: str, service: Any, reference: Any) -> None:
+        if not self._guards[field].admit(service):
+            return
+        self._rebuild()
+
+    @UnbindField("_run_controller")
+    def _on_run_controller_unbind(
+        self, field: str, service: Any, reference: Any
+    ) -> None:
+        self._guards[field].release(service)
+        self._graph = None
+
     @BindField("_response_format_provider", if_valid=True)
     def _on_response_format_bind(self, field: str, service: Any, reference: Any) -> None:
         if not self._guards[field].admit(service):
@@ -602,6 +628,29 @@ class PluginAgentLoop:
         for provider in self._effective(self._middleware_providers):
             middlewares.extend(provider.get_middlewares())
         return middlewares
+
+    def _decide(self, rounds_run: int) -> RunDecision | None:
+        """Ask the controller what to do now that the graph has gone quiet.
+
+        Returns ``None`` when no controller is bound — the plain-agent path,
+        where one graph run is the whole turn. A controller that raises must
+        not kill the stream: the run stops and the failure is logged.
+        """
+        if self._run_controller is None:
+            return None
+        try:
+            decision: RunDecision = self._run_controller.decide(
+                rounds_run=rounds_run,
+                checkpointer_available=self._checkpointer_provider is not None,
+            )
+            return decision
+        except Exception:
+            LOGGER.exception("Run controller failed; stopping the run")
+            return Stop(
+                status="active",
+                reason="controller-error",
+                wrapup="The run controller failed; stopping here.",
+            )
 
     def _drain_job_events(self) -> list[dict[str, Any]]:
         """Take whatever background-job events have queued up.
@@ -757,24 +806,18 @@ class PluginAgentLoop:
             {"messages": [{"role": "user", "content": message}]}, config=config
         )
 
-    async def astream(
-        self, message: str, *, thread_id: str | None = None, resume: Any = None
+    async def _forward_stream(
+        self,
+        stream: AsyncIterator[tuple[str, Any]],
+        previous_content: dict[str, str],
+        usage_totals: dict[str, int],
     ) -> AsyncIterator[dict[str, Any]]:
-        if self._graph is None:
-            self._rebuild()
-        if self._graph is None:
-            raise RuntimeError("Agent graph is not built; no LLM plugin is available")
-        config = {"configurable": {"thread_id": thread_id}} if thread_id else None
-        previous_content: dict[str, str] = {}
-        usage_totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-        input_value: Any = Command(resume=resume) if resume is not None else {
-            "messages": [{"role": "user", "content": message}]
-        }
-        async for stream_type, chunk in self._graph.astream(
-            input_value,
-            config=config,
-            stream_mode=["messages", "updates"],
-        ):
+        """Translate one graph run's chunks into stream events.
+
+        Pulled out of ``astream`` so the continuation loop and the wrapup round
+        share exactly one translator instead of two copies that can drift.
+        """
+        async for stream_type, chunk in stream:
             for job_event in self._drain_job_events():
                 yield job_event
             if stream_type == "messages":
@@ -831,6 +874,76 @@ class PluginAgentLoop:
                             "tool_call_id": tool_call["id"],
                             "args": tool_call["args"],
                         }
+
+    async def astream(
+        self, message: str, *, thread_id: str | None = None, resume: Any = None
+    ) -> AsyncIterator[dict[str, Any]]:
+        if self._graph is None:
+            self._rebuild()
+        if self._graph is None:
+            raise RuntimeError("Agent graph is not built; no LLM plugin is available")
+        config = {"configurable": {"thread_id": thread_id}} if thread_id else None
+        previous_content: dict[str, str] = {}
+        usage_totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        input_value: Any = Command(resume=resume) if resume is not None else {
+            "messages": [{"role": "user", "content": message}]
+        }
+
+        def run_graph(payload: Any) -> Any:
+            return self._graph.astream(
+                payload, config=config, stream_mode=["messages", "updates"]
+            )
+
+        rounds_run = 0
+        while True:
+            async for event in self._forward_stream(
+                run_graph(input_value), previous_content, usage_totals
+            ):
+                yield event
+            decision = self._decide(rounds_run)
+            if decision is None:
+                break
+            if isinstance(decision, Continue):
+                if self._checkpointer_provider is None:
+                    # Enforced here rather than trusted to the controller: a
+                    # second astream without a checkpointer starts from an
+                    # empty conversation, so "continuing" would silently throw
+                    # away everything the run had established.
+                    yield {"type": "goal_status", "status": "active"}
+                    yield {
+                        "type": "goal_wrapup",
+                        "text": (
+                            "This run cannot continue automatically: no "
+                            "checkpointer is configured, so the conversation "
+                            "would restart and lose its context."
+                        ),
+                    }
+                    break
+                rounds_run += 1
+                yield {
+                    "type": "goal_round_started",
+                    "round": decision.round,
+                    "message": decision.message,
+                }
+                # Same thread_id, so the checkpointer carries the conversation
+                # forward instead of starting over.
+                input_value = {
+                    "messages": [{"role": "user", "content": decision.message}]
+                }
+                continue
+            if isinstance(decision, AwaitUser):
+                yield {"type": "goal_status", "status": "awaiting_user"}
+                break
+            yield {"type": "goal_status", "status": decision.status}
+            yield {"type": "goal_wrapup", "text": decision.wrapup}
+            # One final model step, so the user gets prose rather than a stop.
+            async for event in self._forward_stream(
+                run_graph({"messages": [{"role": "user", "content": decision.wrapup}]}),
+                previous_content,
+                usage_totals,
+            ):
+                yield event
+            break
         if usage_totals["total_tokens"]:
             yield {"type": "usage", **usage_totals}
 
