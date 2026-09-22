@@ -655,7 +655,7 @@ git commit -m "feat: track workspace mutation generations"
 ```python
 """Tests for the code workspace reading tools."""
 # mypy: ignore-errors
-# pyright: reportOptionalMemberAccess=false
+# pyright: reportAttributeAccessIssue=false, reportOptionalMemberAccess=false
 
 from __future__ import annotations
 
