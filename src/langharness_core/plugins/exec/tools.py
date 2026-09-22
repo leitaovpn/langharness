@@ -41,6 +41,28 @@ MAX_TIMEOUT_SECONDS = 600
 DEFAULT_MAX_OUTPUT_BYTES = 65_536
 
 
+WAIT_CEILING_SECONDS = 30
+
+
+class JobIdArgs(BaseModel):
+    job_id: str = Field(min_length=1, description="Job id from exec_command.")
+
+
+class WaitJobArgs(JobIdArgs):
+    # No upper bound here: the tool clamps to WAIT_CEILING_SECONDS itself, the
+    # same way exec_command clamps its timeout. Rejecting the call would cost
+    # the model a round trip to learn a number it does not care about.
+    timeout_seconds: int = Field(
+        default=WAIT_CEILING_SECONDS,
+        ge=1,
+        description="How long to wait before returning the current snapshot.",
+    )
+
+
+class WriteStdinArgs(JobIdArgs):
+    data: str = Field(description="Text to send to the process's standard input.")
+
+
 class ExecCommandArgs(BaseModel):
     command: list[str] = Field(
         min_length=1,
@@ -92,6 +114,7 @@ class ExecToolsPlugin:
         self._workspace: Any = None
         self._state: Any = None
         self._agent_id = ""
+        self._offsets: dict[str, int] = {}
         self._guards: dict[str, ContractGuard] = {
             "_jobs": ContractGuard(self, "_jobs", JobManagerProvider),
             "_workspace": ContractGuard(self, "_workspace", WorkspaceProvider),
@@ -128,10 +151,19 @@ class ExecToolsPlugin:
     def get_tools(self) -> list[Any]:
         if self._workspace is None or self._jobs is None:
             return []
-        return [self._exec_tool()]
+        return [
+            self._exec_tool(),
+            self._wait_tool(),
+            self._stdin_tool(),
+            self._stop_tool(),
+        ]
 
     def get_tool_presentations(self) -> dict[str, str]:
-        return {"exec_command": "exec_command({command})"}
+        return {
+            "exec_command": "exec_command({command})",
+            "wait_job": "wait_job({job_id})",
+            "stop_job": "stop_job({job_id})",
+        }
 
     def _resolve_cwd(self, raw: str) -> Any:
         return resolve_workspace_path(self._workspace.get_workspace(), raw or ".")
@@ -225,5 +257,104 @@ class ExecToolsPlugin:
                 "details}}."
             ),
             args_schema=ExecCommandArgs,
+        )
+
+    def _wait_tool(self) -> StructuredTool:
+        plugin = self
+
+        def wait_job(
+            job_id: str, timeout_seconds: int = WAIT_CEILING_SECONDS
+        ) -> dict[str, Any]:
+            try:
+                record = plugin._jobs.wait_job(
+                    job_id, min(int(timeout_seconds), WAIT_CEILING_SECONDS)
+                )
+                text, offset = plugin._jobs.read_output(
+                    job_id, plugin._offsets.get(job_id, 0)
+                )
+            except KeyError:
+                return tool_error("job_not_found", f"unknown job {job_id!r}")
+            plugin._offsets[job_id] = offset
+            if record.state != "running":
+                plugin._note_mutation(".", "wait_job")
+            return {
+                "job_id": job_id,
+                "state": record.state,
+                "exit_code": record.exit_code,
+                "output": text,
+                "truncated": False,
+                "new_output": bool(text),
+            }
+
+        return StructuredTool.from_function(
+            func=wait_job,
+            name="wait_job",
+            description=(
+                "Wait up to timeout_seconds for a background job, then return "
+                "its current snapshot. 'output' is only what arrived SINCE "
+                "YOUR LAST CALL to this tool, so polling does not re-flood the "
+                "conversation. If 'state' is still 'running' the job is not "
+                "finished; decide whether to keep waiting or do something else "
+                "rather than spinning here. Returns {\"job_id\": str, "
+                "\"state\": 'running'|'exited'|'killed'|'timed_out', "
+                "\"exit_code\": int|null, \"output\": str, \"truncated\": bool, "
+                "\"new_output\": bool}, or {\"error\": {code, message, "
+                "retryable, details}}."
+            ),
+            args_schema=WaitJobArgs,
+        )
+
+    def _stdin_tool(self) -> StructuredTool:
+        plugin = self
+
+        def write_stdin(job_id: str, data: str) -> dict[str, Any]:
+            try:
+                record = plugin._jobs.write_stdin(job_id, data)
+            except KeyError:
+                return tool_error("job_not_found", f"unknown job {job_id!r}")
+            except RuntimeError as exc:
+                return tool_error("job_not_running", str(exc), retryable=True)
+            return {"job_id": record.id, "state": record.state, "written": len(data)}
+
+        return StructuredTool.from_function(
+            func=write_stdin,
+            name="write_stdin",
+            description=(
+                "Send text to a background job's standard input, for commands "
+                "that prompt or read a stream. Returns {\"job_id\": str, "
+                "\"state\": str, \"written\": int}, or {\"error\": {code, "
+                "message, retryable, details}} when the job is unknown or has "
+                "already stopped taking input."
+            ),
+            args_schema=WriteStdinArgs,
+        )
+
+    def _stop_tool(self) -> StructuredTool:
+        plugin = self
+
+        def stop_job(job_id: str) -> dict[str, Any]:
+            try:
+                record = plugin._jobs.stop_job(job_id)
+            except KeyError:
+                return tool_error("job_not_found", f"unknown job {job_id!r}")
+            plugin._note_mutation(".", "stop_job")
+            return {
+                "job_id": record.id,
+                "state": record.state,
+                "exit_code": record.exit_code,
+            }
+
+        return StructuredTool.from_function(
+            func=stop_job,
+            name="stop_job",
+            description=(
+                "Stop a background job and its whole process group, including "
+                "any children it spawned. Use it when a command is stuck or no "
+                "longer needed; the process does not survive this call. "
+                "Returns {\"job_id\": str, \"state\": 'killed', \"exit_code\": "
+                "int|null}, or {\"error\": {code, message, retryable, "
+                "details}}."
+            ),
+            args_schema=JobIdArgs,
         )
 

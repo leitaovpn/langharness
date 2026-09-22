@@ -138,3 +138,125 @@ def test_output_is_truncated_and_flagged(tmp_path: Path) -> None:
 def test_presentations_name_only_arguments_the_tools_take(tmp_path: Path) -> None:
     presentations = build(tmp_path).get_tool_presentations()
     assert presentations["exec_command"] == "exec_command({command})"
+
+
+WAIT_CEILING = 30
+
+
+def test_wait_job_returns_output_since_the_last_call(tmp_path: Path) -> None:
+    instance = build(tmp_path)
+    started = run(
+        instance,
+        command=[sys.executable, "-c", "print('first')"],
+        background=True,
+    )
+    first = wait(instance, started["job_id"], 10)
+    assert first["state"] == "exited"
+    assert "first" in first["output"]
+    again = wait(instance, started["job_id"], 1)
+    assert again["output"] == ""
+    assert again["new_output"] is False
+
+
+def test_wait_job_on_a_running_job_returns_the_current_snapshot(tmp_path: Path) -> None:
+    instance = build(tmp_path)
+    started = run(
+        instance,
+        command=[sys.executable, "-c", "import time; time.sleep(20)"],
+        background=True,
+    )
+    snapshot = wait(instance, started["job_id"], 1)
+    assert snapshot["state"] == "running"
+    assert snapshot["exit_code"] is None
+    stop(instance, started["job_id"])
+
+
+def test_wait_job_clamps_its_window(tmp_path: Path) -> None:
+    instance = build(tmp_path)
+    started = run(
+        instance,
+        command=[sys.executable, "-c", "import time; time.sleep(20)"],
+        background=True,
+    )
+    import time as clock
+
+    begun = clock.monotonic()
+    wait(instance, started["job_id"], 600)
+    assert clock.monotonic() - begun < WAIT_CEILING + 5
+    stop(instance, started["job_id"])
+
+
+def test_wait_job_on_an_unknown_job_is_an_error(tmp_path: Path) -> None:
+    assert wait(build(tmp_path), "nope", 1)["error"]["code"] == "job_not_found"
+
+
+def test_stop_job_kills_the_group_and_reports_it(tmp_path: Path) -> None:
+    instance = build(tmp_path)
+    started = run(
+        instance,
+        command=[sys.executable, "-c", "import time; time.sleep(20)"],
+        background=True,
+    )
+    stopped = stop(instance, started["job_id"])
+    assert stopped["state"] == "killed"
+
+
+def test_stop_job_on_an_unknown_job_is_an_error(tmp_path: Path) -> None:
+    assert (
+        stop(build(tmp_path), "nope")["error"]["code"] == "job_not_found"
+    )
+
+
+def test_write_stdin_feeds_the_process(tmp_path: Path) -> None:
+    instance = build(tmp_path)
+    started = run(
+        instance,
+        command=[sys.executable, "-c", "import sys; print(sys.stdin.readline().strip())"],
+        background=True,
+    )
+    assert write(instance, started["job_id"], "hello\n")["written"] == 6
+    assert "hello" in wait(instance, started["job_id"], 10)["output"]
+
+
+def test_write_stdin_to_a_finished_job_is_an_error(tmp_path: Path) -> None:
+    instance = build(tmp_path)
+    started = run(
+        instance, command=[sys.executable, "-c", "print(1)"], background=True
+    )
+    wait(instance, started["job_id"], 10)
+    result = write(instance, started["job_id"], "late\n")
+    assert result["error"]["code"] == "job_not_running"
+
+
+def test_background_jobs_are_owned_by_the_agent(tmp_path: Path) -> None:
+    instance = build(tmp_path)
+    instance._agent_id = "alpha::s1"
+    started = run(
+        instance,
+        command=[sys.executable, "-c", "import time; time.sleep(20)"],
+        background=True,
+    )
+    assert instance._jobs.get_job(started["job_id"]).owner == "alpha::s1"
+    stop(instance, started["job_id"])
+
+
+def test_presentations_cover_every_job_tool(tmp_path: Path) -> None:
+    presentations = build(tmp_path).get_tool_presentations()
+    assert presentations["wait_job"] == "wait_job({job_id})"
+    assert presentations["stop_job"] == "stop_job({job_id})"
+    # write_stdin is absent: its payload reads better as the bare name.
+    assert "write_stdin" not in presentations
+
+
+def wait(instance: ExecToolsPlugin, job_id: str, timeout: int) -> dict:
+    return tools(instance)["wait_job"].invoke(
+        {"job_id": job_id, "timeout_seconds": timeout}
+    )
+
+
+def stop(instance: ExecToolsPlugin, job_id: str) -> dict:
+    return tools(instance)["stop_job"].invoke({"job_id": job_id})
+
+
+def write(instance: ExecToolsPlugin, job_id: str, data: str) -> dict:
+    return tools(instance)["write_stdin"].invoke({"job_id": job_id, "data": data})

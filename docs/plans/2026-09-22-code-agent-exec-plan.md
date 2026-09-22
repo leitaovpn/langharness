@@ -1761,10 +1761,12 @@ class JobIdArgs(BaseModel):
 
 
 class WaitJobArgs(JobIdArgs):
+    # No upper bound here: the tool clamps to WAIT_CEILING_SECONDS itself, the
+    # same way exec_command clamps its timeout. Rejecting the call would cost
+    # the model a round trip to learn a number it does not care about.
     timeout_seconds: int = Field(
         default=WAIT_CEILING_SECONDS,
         ge=1,
-        le=WAIT_CEILING_SECONDS,
         description="How long to wait before returning the current snapshot.",
     )
 
