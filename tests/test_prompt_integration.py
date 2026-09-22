@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -211,6 +212,30 @@ def test_deeper_instructions_arrive_on_the_next_model_step(tmp_path: Path) -> No
     assert len(SYSTEM_PROMPTS) >= 2, SYSTEM_PROMPTS
     assert "deep instruction" not in SYSTEM_PROMPTS[0]
     assert "deep instruction" in SYSTEM_PROMPTS[1]
+
+
+def test_instruction_changes_take_effect_without_restarting_the_agent(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "AGENTS.md"
+    write(target, "first revision")
+    SYSTEM_PROMPTS.clear()
+    manager = start(installs(tmp_path, CapturingModel()))
+    try:
+        loop = manager.find_service(SPEC_AGENT_LOOP)
+        loop.invoke("hello")
+        assert "first revision" in SYSTEM_PROMPTS[-1]
+
+        write(target, "second revision")
+        # Guarantee a different mtime even on a coarse-grained filesystem.
+        os.utime(target, (1, 1))
+
+        # Same loop instance, no reinstall: the prompt must pick up the edit.
+        loop.invoke("again")
+        assert "second revision" in SYSTEM_PROMPTS[-1]
+        assert "first revision" not in SYSTEM_PROMPTS[-1]
+    finally:
+        manager.stop()
 
 
 def test_repository_instructions_drop_out_when_the_workspace_is_gone() -> None:
