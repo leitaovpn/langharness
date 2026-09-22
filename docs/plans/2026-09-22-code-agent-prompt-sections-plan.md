@@ -2059,11 +2059,12 @@ git commit -m "feat: load repository instructions into ordered prompt sections"
 ```python
 """Tests for the per-step prompt middleware."""
 # mypy: ignore-errors
+# pyright: reportArgumentType=false
 
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
+from typing import Any
 
 from langchain_core.messages import SystemMessage
 
@@ -2071,26 +2072,34 @@ from langharness_core.plugins.prompts.middleware import PromptMiddleware
 from langharness_core.plugins.prompts.sections import AssembledPrompt
 
 
-def request(system_message=None):
-    return SimpleNamespace(
-        state={"messages": []},
-        system_message=system_message,
-    )
+class FakeRequest:
+    """Stands in for ``ModelRequest``; only ``override`` is exercised here."""
+
+    def __init__(self, state: dict[str, Any], system_message: Any = None) -> None:
+        self.state = state
+        self.system_message = system_message
+
+    def override(self, **overrides: Any) -> FakeRequest:
+        return FakeRequest(
+            self.state, overrides.get("system_message", self.system_message)
+        )
 
 
-def recording_handler(seen: list):
-    def handler(req):
+def request(system_message: Any = None) -> FakeRequest:
+    return FakeRequest({"messages": []}, system_message)
+
+
+def recording_handler(seen: list) -> Any:
+    def handler(req: FakeRequest) -> str:
         seen.append(req.system_message)
         return "response"
 
     return handler
 
 
-def build(text: str, empty: bool = False):
-    def builder(state):
-        return AssembledPrompt(text=text, traces=()) if not empty else AssembledPrompt(
-            text="", traces=()
-        )
+def build(text: str, empty: bool = False) -> Any:
+    def builder(state: Any) -> AssembledPrompt:
+        return AssembledPrompt(text="" if empty else text, traces=())
 
     return builder
 
@@ -2105,7 +2114,7 @@ def test_sync_path_sets_the_system_message() -> None:
 def test_async_path_sets_the_system_message() -> None:
     seen: list = []
 
-    async def handler(req):
+    async def handler(req: FakeRequest) -> str:
         seen.append(req.system_message)
         return "response"
 
@@ -2118,7 +2127,9 @@ def test_empty_prompt_leaves_the_request_untouched() -> None:
     seen: list = []
     existing = SystemMessage(content="pre-existing")
     middleware = PromptMiddleware(build("", empty=True))
-    middleware.wrap_model_call(request(system_message=existing), recording_handler(seen))
+    middleware.wrap_model_call(
+        request(system_message=existing), recording_handler(seen)
+    )
     assert seen[0] is existing
 
 
@@ -2201,16 +2212,44 @@ Expected: PASS（4 passed）
 
 - [ ] **Step 5: 写失败的 loop 集成测试**
 
-先改写 `tests/test_system_prompt.py` 中三个依赖旧行为的测试。把
-`make_provider` 换成带 `get_plugin_info` 的版本，并删除 `_collect_system_prompt`
-断言：
+把 `tests/test_system_prompt.py` 整体替换为下面这版。`make_provider` 现在必须
+同时提供 `get_plugin_info`（`legacy_sections` 要读它），原有的三个
+`_collect_system_prompt()` 断言改为断言 `_prompt_for_request()`：
 
 ```python
+"""Tests for the system-prompt plugin vertical slice."""
+# mypy: ignore-errors
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+import langharness_core.plugins.loop.agent_loop as agent_loop_module
+from langharness_core.plugins.loop.agent_loop import PluginAgentLoop
+from langharness_core.plugins.prompts.middleware import PromptMiddleware
+from langharness_core.plugins.system_prompt.template_system_prompt import (
+    TemplateSystemPromptPlugin,
+)
+
+
 def make_provider(text: str, name: str = "system-prompt-plugin"):
     return SimpleNamespace(
         get_system_prompt=lambda: text,
         get_plugin_info=lambda: {"name": name, "version": "1.0.0"},
     )
+
+
+def test_system_prompt_plugin_exposes_configured_prompt() -> None:
+    plugin = TemplateSystemPromptPlugin()
+    plugin._system_prompt = "You are a calculator."
+    assert plugin.get_system_prompt() == "You are a calculator."
+    assert plugin.get_plugin_info() == {
+        "name": "system-prompt-plugin",
+        "version": "1.0.0",
+    }
 
 
 def test_legacy_providers_are_joined_in_effective_order() -> None:
@@ -2239,12 +2278,29 @@ def test_nearest_scope_provider_shadows_the_same_plugin_further_out() -> None:
     assert loop._prompt_for_request({"messages": []}).text == "near"
 
 
+def test_a_failing_section_provider_does_not_break_assembly(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class Boom:
+        def get_prompt_sections(self, context):
+            raise RuntimeError("provider exploded")
+
+    loop = PluginAgentLoop()
+    loop._system_prompt_providers = [make_provider("legacy survives")]
+    loop._prompt_section_providers = [Boom()]
+    assembled = loop._prompt_for_request({"messages": []})
+    assert assembled.text == "legacy survives"
+    assert "provider exploded" in caplog.text
+
+
 def test_rebuild_installs_the_prompt_middleware(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
-    def fake_create_agent(model, tools=None, *, system_prompt=None, middleware=None, **kwargs):
+    def fake_create_agent(
+        model, tools=None, *, system_prompt=None, middleware=None, **kwargs
+    ):
         captured["system_prompt"] = system_prompt
         captured["middleware"] = middleware
         return object()
@@ -2253,6 +2309,8 @@ def test_rebuild_installs_the_prompt_middleware(
 
     loop = PluginAgentLoop()
     loop._llm_provider = SimpleNamespace(get_model=lambda: object())
+    loop._tool_providers = []
+    loop._middleware_providers = []
     loop._system_prompt_providers = [make_provider("You are A.")]
 
     loop._rebuild()
@@ -2262,17 +2320,12 @@ def test_rebuild_installs_the_prompt_middleware(
     assert isinstance(middlewares[-1], PromptMiddleware)
 ```
 
-同时在文件顶部把 `agent_loop_module` 那段导入补上 `PromptMiddleware`：
-
-```python
-from langharness_core.plugins.prompts.middleware import PromptMiddleware
-```
-
 再新建 `tests/test_prompt_integration.py`，用真实 Pelix 框架验证整条链路：
 
 ```python
 """End-to-end prompt assembly through the real Pelix/iPOPO framework."""
 # mypy: ignore-errors
+# pyright: reportOptionalMemberAccess=false
 
 from __future__ import annotations
 
@@ -2282,12 +2335,14 @@ from typing import Any
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.tools import tool
 
 from langharness_core.contracts import (
     SPEC_AGENT_LOOP,
     SPEC_LLM,
     SPEC_PROMPT_SECTION,
     SPEC_SYSTEM_PROMPT,
+    SPEC_TOOL,
     SPEC_WORKSPACE,
 )
 from langharness_plugin.plugin_manager import PluginManager
@@ -2301,6 +2356,12 @@ DESCRIPTION = (
 )
 
 SYSTEM_PROMPTS: list[str] = []
+
+
+@tool
+def read_file(path: str) -> str:
+    """Read a file from the workspace."""
+    return f"contents of {path}"
 
 
 class CapturingModel(BaseChatModel):
@@ -2320,7 +2381,43 @@ class CapturingModel(BaseChatModel):
         return self
 
 
-def descriptor(name: str, module: str, factory: str, specification: str) -> PluginDescriptor:
+class ToolCallingModel(CapturingModel):
+    """Calls ``read_file`` once, then stops."""
+
+    called: bool = False
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        for message in messages:
+            if message.type == "system":
+                SYSTEM_PROMPTS.append(str(message.content))
+        if not self.called:
+            self.called = True
+            return ChatResult(
+                generations=[
+                    ChatGeneration(
+                        message=AIMessage(
+                            content="",
+                            tool_calls=[
+                                {
+                                    "name": "read_file",
+                                    "args": {"path": "deep/a.py"},
+                                    "id": "c1",
+                                    "type": "tool_call",
+                                }
+                            ],
+                        )
+                    )
+                ]
+            )
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content="ok"))])
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+
+def descriptor(
+    name: str, module: str, factory: str, specification: str
+) -> PluginDescriptor:
     return PluginDescriptor(
         name=name,
         version="1.0.0",
@@ -2331,7 +2428,9 @@ def descriptor(name: str, module: str, factory: str, specification: str) -> Plug
     )
 
 
-def start(installs: list[tuple[PluginDescriptor, dict[str, Any]]]) -> PluginManager:
+def start(
+    installs: list[tuple[PluginDescriptor, dict[str, Any]]],
+) -> PluginManager:
     manager = PluginManager(PluginRegistry())
     manager.start()
     for item, _ in installs:
@@ -2343,11 +2442,27 @@ def start(installs: list[tuple[PluginDescriptor, dict[str, Any]]]) -> PluginMana
     return manager
 
 
-def installs(tmp_path: Path) -> list[tuple[PluginDescriptor, dict[str, Any]]]:
+def installs(
+    workspace: Path, model: BaseChatModel
+) -> list[tuple[PluginDescriptor, dict[str, Any]]]:
     return [
         (
-            descriptor("llm", "langharness_core.plugins.llm.llm", "llm-plugin-factory", SPEC_LLM),
-            {"plugin.model.instance": CapturingModel()},
+            descriptor(
+                "llm",
+                "langharness_core.plugins.llm.llm",
+                "llm-plugin-factory",
+                SPEC_LLM,
+            ),
+            {"plugin.model.instance": model},
+        ),
+        (
+            descriptor(
+                "tools",
+                "langharness_core.plugins.tools.tools",
+                "tools-plugin-factory",
+                SPEC_TOOL,
+            ),
+            {"plugin.tool_functions": [read_file]},
         ),
         (
             descriptor(
@@ -2356,7 +2471,7 @@ def installs(tmp_path: Path) -> list[tuple[PluginDescriptor, dict[str, Any]]]:
                 "workspace-root-plugin-factory",
                 SPEC_WORKSPACE,
             ),
-            {"plugin.workspace.root_dir": str(tmp_path)},
+            {"plugin.workspace.root_dir": str(workspace)},
         ),
         (
             descriptor(
@@ -2388,10 +2503,15 @@ def installs(tmp_path: Path) -> list[tuple[PluginDescriptor, dict[str, Any]]]:
     ]
 
 
+def write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
 def test_legacy_and_repository_sections_reach_the_model(tmp_path: Path) -> None:
-    (tmp_path / "AGENTS.md").write_text("root instruction", encoding="utf-8")
+    write(tmp_path / "AGENTS.md", "root instruction")
     SYSTEM_PROMPTS.clear()
-    manager = start(installs(tmp_path))
+    manager = start(installs(tmp_path, CapturingModel()))
     try:
         loop = manager.find_service(SPEC_AGENT_LOOP)
         loop.invoke("hello")
@@ -2403,11 +2523,24 @@ def test_legacy_and_repository_sections_reach_the_model(tmp_path: Path) -> None:
     assert prompt.index("root instruction") < prompt.index("legacy persona")
 
 
-def test_repository_instructions_drop_out_when_the_workspace_is_gone(
-    tmp_path: Path,
-) -> None:
+def test_deeper_instructions_arrive_on_the_next_model_step(tmp_path: Path) -> None:
+    write(tmp_path / "AGENTS.md", "root instruction")
+    write(tmp_path / "deep" / "AGENTS.md", "deep instruction")
     SYSTEM_PROMPTS.clear()
-    manager = start(installs(tmp_path / "missing"))
+    manager = start(installs(tmp_path, ToolCallingModel()))
+    try:
+        loop = manager.find_service(SPEC_AGENT_LOOP)
+        loop.invoke("touch deep/a.py")
+    finally:
+        manager.stop()
+    assert len(SYSTEM_PROMPTS) >= 2, SYSTEM_PROMPTS
+    assert "deep instruction" not in SYSTEM_PROMPTS[0]
+    assert "deep instruction" in SYSTEM_PROMPTS[1]
+
+
+def test_repository_instructions_drop_out_when_the_workspace_is_gone() -> None:
+    SYSTEM_PROMPTS.clear()
+    manager = start(installs(Path("/nonexistent-workspace-root"), CapturingModel()))
     try:
         loop = manager.find_service(SPEC_AGENT_LOOP)
         loop.invoke("hello")

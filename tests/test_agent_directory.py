@@ -310,6 +310,8 @@ def test_validate_materializes_default_plugins_and_loop() -> None:
         "_scoped_llm_providers": visibility,
         "_tool_providers": visibility,
         "_name_provider": visibility,
+        "_prompt_section_providers": visibility,
+        "_workspace_provider": visibility,
     }
 
 

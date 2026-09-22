@@ -154,6 +154,8 @@ AGENT_LOOP_FIELDS: dict[str, str] = {
     SPEC_LLM: "_llm_provider",
     SPEC_TOOL: "_tool_providers",
     SPEC_SYSTEM_PROMPT: "_system_prompt_providers",
+    SPEC_PROMPT_SECTION: "_prompt_section_providers",
+    SPEC_WORKSPACE: "_workspace_provider",
     SPEC_MIDDLEWARE: "_middleware_providers",
     SPEC_NAME: "_name_provider",
     SPEC_RESPONSE_FORMAT: "_response_format_provider",

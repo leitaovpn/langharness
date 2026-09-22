@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 from langchain.agents import create_agent
@@ -34,12 +35,25 @@ from langharness_core.contracts import (
     LLMProvider,
     MiddlewareProvider,
     NameProvider,
+    PromptSection,
+    PromptSectionProvider,
     ResponseFormatProvider,
     StateSchemaProvider,
     StoreProvider,
     SystemPromptProvider,
     ToolProvider,
     TransformersProvider,
+    WorkspaceProvider,
+)
+from langharness_core.plugins.prompts.context import (
+    build_prompt_context,
+    model_display_name,
+)
+from langharness_core.plugins.prompts.legacy import legacy_sections
+from langharness_core.plugins.prompts.middleware import PromptMiddleware
+from langharness_core.plugins.prompts.sections import (
+    AssembledPrompt,
+    assemble_sections,
 )
 from langharness_plugin.scope_policy import (
     resolve_scoped_aggregate,
@@ -125,6 +139,12 @@ def _iter_interrupts(container: Any) -> Iterator[Any]:
 @Requires("_tool_providers", ToolProvider, aggregate=True, optional=True)
 @Requires("_middleware_providers", MiddlewareProvider, aggregate=True, optional=True)
 @Requires("_system_prompt_providers", SystemPromptProvider, aggregate=True, optional=True)
+@Requires(
+    "_prompt_section_providers", PromptSectionProvider, aggregate=True, optional=True
+)
+@RequiresBest(
+    "_workspace_provider", WorkspaceProvider, optional=True, immediate_rebind=True
+)
 @RequiresBest(
     "_response_format_provider",
     ResponseFormatProvider,
@@ -177,6 +197,8 @@ def _iter_interrupts(container: Any) -> Iterator[Any]:
     "_tool_providers",
     "_middleware_providers",
     "_system_prompt_providers",
+    "_prompt_section_providers",
+    "_workspace_provider",
     "_name_provider",
     "_response_format_provider",
     "_cache_provider",
@@ -195,6 +217,8 @@ class PluginAgentLoop:
         self._tool_providers: list[Any] = []
         self._middleware_providers: list[Any] = []
         self._system_prompt_providers: list[Any] = []
+        self._prompt_section_providers: list[Any] = []
+        self._workspace_provider: Any = None
         self._response_format_provider: Any = None
         self._state_schema_provider: Any = None
         self._context_schema_provider: Any = None
@@ -217,6 +241,12 @@ class PluginAgentLoop:
             ),
             "_system_prompt_providers": ContractGuard(
                 self, "_system_prompt_providers", SystemPromptProvider
+            ),
+            "_prompt_section_providers": ContractGuard(
+                self, "_prompt_section_providers", PromptSectionProvider
+            ),
+            "_workspace_provider": ContractGuard(
+                self, "_workspace_provider", WorkspaceProvider
             ),
             "_response_format_provider": ContractGuard(
                 self, "_response_format_provider", ResponseFormatProvider
@@ -378,6 +408,35 @@ class PluginAgentLoop:
             self._forget_service(service)
             self._rebuild()
 
+    @BindField("_prompt_section_providers", if_valid=True)
+    def _on_prompt_section_bind(
+        self, field: str, service: Any, reference: Any
+    ) -> None:
+        if not self._guards[field].admit(service):
+            return
+        self._remember_service(service, reference)
+        self._rebuild()
+
+    @UnbindField("_prompt_section_providers", if_valid=True)
+    def _on_prompt_section_unbind(
+        self, field: str, service: Any, reference: Any
+    ) -> None:
+        with self._excluding_service(service):
+            self._guards[field].release(service)
+            self._forget_service(service)
+            self._rebuild()
+
+    @BindField("_workspace_provider", if_valid=True)
+    def _on_workspace_bind(self, field: str, service: Any, reference: Any) -> None:
+        if not self._guards[field].admit(service):
+            return
+        self._rebuild()
+
+    @UnbindField("_workspace_provider")
+    def _on_workspace_unbind(self, field: str, service: Any, reference: Any) -> None:
+        self._guards[field].release(service)
+        self._graph = None
+
     @BindField("_response_format_provider", if_valid=True)
     def _on_response_format_bind(self, field: str, service: Any, reference: Any) -> None:
         if not self._guards[field].admit(service):
@@ -526,15 +585,52 @@ class PluginAgentLoop:
             middlewares.extend(provider.get_middlewares())
         return middlewares
 
-    def _collect_system_prompt(self) -> str | None:
-        parts = [
-            provider.get_system_prompt()
-            for provider in self._effective(self._system_prompt_providers)
-        ]
-        parts = [part for part in parts if part]
-        if not parts:
+    def _workspace_root(self) -> str:
+        """The realpath every path-taking plugin resolves against."""
+        if self._workspace_provider is not None:
+            return str(self._workspace_provider.get_workspace())
+        return str(Path.cwd())
+
+    def _model_name(self) -> str | None:
+        if self._llm_provider is None:
             return None
-        return "\n".join(parts)
+        return model_display_name(self._llm_provider.get_model())
+
+    def _prompt_for_request(self, state: Mapping[str, Any]) -> AssembledPrompt:
+        """Assemble the system prompt for one model step.
+
+        A failing section provider must not abort the model call: its section is
+        dropped, the failure is logged, and the remaining sections still reach
+        the model.  Prompt assembly runs on the request path, so degrading beats
+        propagating.
+        """
+        workspace = self._workspace_root()
+        context = build_prompt_context(
+            workspace=workspace,
+            messages=state.get("messages") or (),
+            model=self._model_name(),
+        )
+        sections: list[PromptSection] = list(
+            legacy_sections(self._effective(self._system_prompt_providers))
+        )
+        for provider in self._effective(self._prompt_section_providers):
+            try:
+                sections.extend(provider.get_prompt_sections(context))
+            except Exception:
+                LOGGER.exception(
+                    "Prompt section provider %s failed; its section was dropped",
+                    getattr(provider, "_plugin_key", provider),
+                )
+        assembled = assemble_sections(sections)
+        if assembled.traces:
+            LOGGER.debug(
+                "prompt sections: %s",
+                ", ".join(
+                    f"{trace.name}[{trace.bytes}B {trace.sha256[7:19]}]"
+                    for trace in assembled.traces
+                ),
+            )
+        return assembled
 
     def _collect_interrupt_before(self) -> list[str]:
         values: list[str] = []
@@ -578,8 +674,13 @@ class PluginAgentLoop:
             self._graph = create_agent(
                 model,
                 tools=self._collect_tools(),
-                middleware=self._collect_middlewares(),
-                system_prompt=self._collect_system_prompt(),
+                middleware=[
+                    *self._collect_middlewares(),
+                    # Innermost: the assembled prompt is the last word on the
+                    # request's system message.
+                    PromptMiddleware(self._prompt_for_request),
+                ],
+                system_prompt=None,
                 response_format=(
                     self._response_format_provider.get_response_format()
                     if self._response_format_provider
