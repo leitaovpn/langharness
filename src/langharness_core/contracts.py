@@ -32,6 +32,7 @@ SPEC_AGENT_DIRECTORY = "agent.directory"
 SPEC_AGENT_SERVER = "agent.server"
 SPEC_PROMPT_SECTION = "agent.plugin.prompt_section"
 SPEC_WORKSPACE = "agent.plugin.workspace"
+SPEC_WORKSPACE_STATE = "agent.plugin.workspace_state"
 ModelProtocol = Literal["anthropic", "chat", "responses"]
 
 ALL_PLUGIN_SPECS = (
@@ -52,6 +53,7 @@ ALL_PLUGIN_SPECS = (
     SPEC_TRANSFORMERS,
     SPEC_PROMPT_SECTION,
     SPEC_WORKSPACE,
+    SPEC_WORKSPACE_STATE,
     SPEC_AGENT_LOOP,
     SPEC_SESSION_INDEX,
     SPEC_AGENT_REGISTRY,
@@ -87,6 +89,22 @@ class PromptContext:
     workspace: str
     touched_paths: tuple[str, ...] = ()
     model: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MutationRecord:
+    """One write an agent made, at the generation it produced.
+
+    ``before_sha256`` is ``None`` for a created file and ``after_sha256`` is
+    ``None`` for a deleted one, so a report can tell creation from deletion
+    without a separate flag.
+    """
+
+    path: str
+    generation: int
+    tool: str
+    before_sha256: str | None
+    after_sha256: str | None
 
 
 @service_contract(SPEC_LLM)
@@ -149,6 +167,27 @@ class WorkspaceProvider(Protocol):
     """Contract implemented by every ``agent.plugin.workspace`` service."""
 
     def get_workspace(self) -> str: ...
+
+    def get_plugin_info(self) -> dict[str, str]: ...
+
+
+@service_contract(SPEC_WORKSPACE_STATE)
+@runtime_checkable
+class WorkspaceStateProvider(Protocol):
+    """Contract implemented by every ``agent.plugin.workspace_state`` service."""
+
+    def get_generation(self) -> int: ...
+
+    def record_mutation(
+        self,
+        path: str,
+        tool: str,
+        *,
+        before_sha256: str | None = None,
+        after_sha256: str | None = None,
+    ) -> int: ...
+
+    def mutations(self, since: int = 0) -> list[MutationRecord]: ...
 
     def get_plugin_info(self) -> dict[str, str]: ...
 
