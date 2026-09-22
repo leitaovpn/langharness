@@ -140,8 +140,10 @@ def test_stop_carries_status_reason_and_wrapup() -> None:
 
 def test_decisions_are_distinct_types_not_dicts() -> None:
     # A dict-shaped decision would let a typo silently mean "stop".
-    assert not isinstance(Continue(message="x", round=1), dict)
-    assert Continue(message="x", round=1) != AwaitUser(reason="x")
+    decision: RunDecision = Continue(message="x", round=1)
+    assert isinstance(decision, Continue)
+    assert not isinstance(decision, (AwaitUser, Stop))
+    assert not isinstance(decision, dict)
 ```
 
 - [ ] **Step 2: 运行测试确认失败**

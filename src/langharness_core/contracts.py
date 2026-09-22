@@ -36,6 +36,7 @@ SPEC_WORKSPACE_STATE = "agent.plugin.workspace_state"
 SPEC_GOAL = "agent.plugin.goal"
 SPEC_VERIFIER = "agent.plugin.verifier"
 SPEC_JOB_MANAGER = "agent.plugin.job_manager"
+SPEC_RUN_CONTROLLER = "agent.plugin.run_controller"
 ModelProtocol = Literal["anthropic", "chat", "responses"]
 
 ALL_PLUGIN_SPECS = (
@@ -60,6 +61,7 @@ ALL_PLUGIN_SPECS = (
     SPEC_GOAL,
     SPEC_VERIFIER,
     SPEC_JOB_MANAGER,
+    SPEC_RUN_CONTROLLER,
     SPEC_AGENT_LOOP,
     SPEC_SESSION_INDEX,
     SPEC_AGENT_REGISTRY,
@@ -210,6 +212,33 @@ class JobRecord:
     exit_code: int | None
 
 
+@dataclass(frozen=True, slots=True)
+class Continue:
+    """Run another round with this synthetic follow-up as the next input."""
+
+    message: str
+    round: int
+
+
+@dataclass(frozen=True, slots=True)
+class AwaitUser:
+    """Stop the automatic run; a real user message is needed to go on."""
+
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class Stop:
+    """End the run. ``wrapup`` is what the final model step is asked to cover."""
+
+    status: str
+    reason: str
+    wrapup: str
+
+
+RunDecision = Continue | AwaitUser | Stop
+
+
 @service_contract(SPEC_LLM)
 @runtime_checkable
 class LLMProvider(Protocol):
@@ -356,6 +385,18 @@ class JobManagerProvider(Protocol):
     def drain_events(self) -> list[dict[str, Any]]: ...
 
     def shutdown_jobs(self) -> None: ...
+
+    def get_plugin_info(self) -> dict[str, str]: ...
+
+
+@service_contract(SPEC_RUN_CONTROLLER)
+@runtime_checkable
+class RunControllerProvider(Protocol):
+    """Contract implemented by every ``agent.plugin.run_controller`` service."""
+
+    def decide(
+        self, *, rounds_run: int, checkpointer_available: bool
+    ) -> RunDecision: ...
 
     def get_plugin_info(self) -> dict[str, str]: ...
 
