@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -83,6 +84,28 @@ def test_the_whole_process_group_dies_with_the_command(tmp_path: Path) -> None:
     assert not _group_alive(outcome.pid)
 
 
+def test_a_process_that_ignores_sigterm_is_killed(tmp_path: Path) -> None:
+    script = (
+        "import signal,time;"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN);"
+        "time.sleep(30)"
+    )
+    outcome = runner.run_command(
+        [sys.executable, "-c", script], cwd=tmp_path, timeout_seconds=0.5
+    )
+    assert outcome.timed_out is True
+    assert not _group_alive(outcome.pid)
+
+
+def test_terminating_an_already_dead_process_is_a_no_op(tmp_path: Path) -> None:
+    process = subprocess.Popen(
+        [sys.executable, "-c", "pass"], start_new_session=True
+    )
+    process.wait()
+    # The leader is reaped, so its group id is gone; this must not raise.
+    runner.terminate_process_group(process)
+
+
 def test_cwd_is_honoured(tmp_path: Path) -> None:
     nested = tmp_path / "nested"
     nested.mkdir()
@@ -127,8 +150,6 @@ def test_the_default_allowlist_covers_what_a_toolchain_needs() -> None:
 
 
 def _group_alive(pid: int) -> bool:
-    import subprocess
-
     try:
         os.getpgid(pid)
     except ProcessLookupError:
