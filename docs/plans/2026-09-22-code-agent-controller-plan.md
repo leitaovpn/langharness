@@ -340,18 +340,24 @@ def test_verify_reports_the_checks_it_ran(tmp_path: Path) -> None:
     assert result["checks"][0]["exit_code"] == 0
 
 
-def test_a_stale_report_is_surfaced_before_finishing(tmp_path: Path) -> None:
-    # The point of verify: learn this BEFORE calling finish_goal.
+def test_verify_always_reports_a_freshly_run_report(tmp_path: Path) -> None:
+    # verify re-runs the gates on every call, so the report it hands back is
+    # never the stale one. Staleness is what finish_goal catches instead, when
+    # an edit lands between a verify and the submission.
     instance = build(tmp_path)
     instance._goals.create_goal(
         "fix it", [{"id": "c1", "text": "t", "evidence": "tool:x"}]
     )
     instance._state.record_mutation("a.py", "apply_patch", after_sha256="sha256:x")
-    assert verify(instance)["would_complete"] is True
+    first = verify(instance)
+    assert first["would_complete"] is True
+    assert first["mutation_generation"] == 1
+
     instance._state.record_mutation("a.py", "apply_patch", after_sha256="sha256:y")
-    result = verify(instance)
-    assert result["would_complete"] is False
-    assert any("generation" in item for item in result["blockers"])
+    second = verify(instance)
+    assert second["mutation_generation"] == 2
+    assert second["report_id"] != first["report_id"]
+    assert second["would_complete"] is True
 
 
 def test_plugin_info_reports_the_component_identity(tmp_path: Path) -> None:
