@@ -15,6 +15,7 @@ from langharness_core.contracts import (
     SPEC_CHECKPOINTER,
     SPEC_CONTEXT_SCHEMA,
     SPEC_DEBUG,
+    SPEC_GOAL,
     SPEC_INTERRUPT_AFTER,
     SPEC_INTERRUPT_BEFORE,
     SPEC_LLM,
@@ -28,6 +29,7 @@ from langharness_core.contracts import (
     SPEC_SYSTEM_PROMPT,
     SPEC_TOOL,
     SPEC_TRANSFORMERS,
+    SPEC_VERIFIER,
     SPEC_WORKSPACE,
     SPEC_WORKSPACE_STATE,
 )
@@ -75,6 +77,21 @@ AGENT_PLUGIN_CATALOG: dict[str, tuple[str, str, str]] = {
     "code-tools": (
         "langharness_core.plugins.tools.code_workspace",
         "code-workspace-tools-plugin-factory",
+        SPEC_TOOL,
+    ),
+    "goal": (
+        "langharness_core.plugins.goals.sqlite",
+        "sqlite-goal-plugin-factory",
+        SPEC_GOAL,
+    ),
+    "verifier": (
+        "langharness_core.plugins.verifier.project",
+        "project-verifier-plugin-factory",
+        SPEC_VERIFIER,
+    ),
+    "goal-tools": (
+        "langharness_core.plugins.goals.tools",
+        "goal-tools-plugin-factory",
         SPEC_TOOL,
     ),
 }
@@ -233,6 +250,27 @@ AGENT_PLUGIN_DESCRIPTIONS: dict[str, str] = {
         "plugin.tools.max_read_bytes, plugin.tools.max_entries, "
         "plugin.agent_id. Requires a restart for property changes. Uninstall "
         "when the agent is removed."
+    ),
+    "goal": (
+        "Persists the agent's objective, acceptance criteria and revision, and "
+        "refuses updates that lose the revision race. Implements "
+        "agent.plugin.goal. Properties: plugin.goal.path, "
+        "plugin.goal.max_rounds, plugin.agent_id. Requires a restart for "
+        "property changes. Uninstall when the agent is removed."
+    ),
+    "verifier": (
+        "Runs the project's configured gate commands and signs a verification "
+        "report tying the result to a workspace generation. Implements "
+        "agent.plugin.verifier. Properties: plugin.verify.commands (a list of "
+        "argv arrays), plugin.verify.timeout_seconds, plugin.agent_id. "
+        "Requires a restart for property changes. Uninstall when the agent is "
+        "removed."
+    ),
+    "goal-tools": (
+        "Exposes get_goal and finish_goal, and enforces the completion gate "
+        "before a goal may reach 'complete'. Implements agent.plugin.tools. "
+        "Properties: plugin.agent_id. Requires a restart for property changes. "
+        "Uninstall when the agent is removed."
     ),
     "agent-loop": (
         "Runs the agent loop for one agent scope. Implements "
@@ -530,6 +568,19 @@ def builtin_package() -> PluginPackage:
                 "code-tools-template",
                 "agent",
                 agent_plugin_template_descriptor("code-tools"),
+            ),
+            PluginContribution(
+                "goal-template", "agent", agent_plugin_template_descriptor("goal")
+            ),
+            PluginContribution(
+                "verifier-template",
+                "agent",
+                agent_plugin_template_descriptor("verifier"),
+            ),
+            PluginContribution(
+                "goal-tools-template",
+                "agent",
+                agent_plugin_template_descriptor("goal-tools"),
             ),
             PluginContribution(
                 "agent-loop-template", "agent", agent_loop_template_descriptor()
