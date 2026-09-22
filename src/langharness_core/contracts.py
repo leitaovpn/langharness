@@ -35,6 +35,7 @@ SPEC_WORKSPACE = "agent.plugin.workspace"
 SPEC_WORKSPACE_STATE = "agent.plugin.workspace_state"
 SPEC_GOAL = "agent.plugin.goal"
 SPEC_VERIFIER = "agent.plugin.verifier"
+SPEC_JOB_MANAGER = "agent.plugin.job_manager"
 ModelProtocol = Literal["anthropic", "chat", "responses"]
 
 ALL_PLUGIN_SPECS = (
@@ -58,6 +59,7 @@ ALL_PLUGIN_SPECS = (
     SPEC_WORKSPACE_STATE,
     SPEC_GOAL,
     SPEC_VERIFIER,
+    SPEC_JOB_MANAGER,
     SPEC_AGENT_LOOP,
     SPEC_SESSION_INDEX,
     SPEC_AGENT_REGISTRY,
@@ -187,6 +189,27 @@ class VerificationReport:
     passed: bool
 
 
+JobState = Literal["running", "exited", "killed", "timed_out"]
+
+
+@dataclass(frozen=True, slots=True)
+class JobRecord:
+    """One command the agent started, and where it got to.
+
+    ``owner`` is ``"<agent_id>::<session_id>"``: a job belongs to the
+    conversation that started it, not to the process.
+    """
+
+    id: str
+    command: tuple[str, ...]
+    cwd: str
+    pid: int
+    state: JobState
+    owner: str
+    started_at: str
+    exit_code: int | None
+
+
 @service_contract(SPEC_LLM)
 @runtime_checkable
 class LLMProvider(Protocol):
@@ -307,6 +330,32 @@ class VerificationProvider(Protocol):
     """Contract implemented by every ``agent.plugin.verifier`` service."""
 
     def verify(self, goal_revision: int) -> VerificationReport: ...
+
+    def get_plugin_info(self) -> dict[str, str]: ...
+
+
+@service_contract(SPEC_JOB_MANAGER)
+@runtime_checkable
+class JobManagerProvider(Protocol):
+    """Contract implemented by every ``agent.plugin.job_manager`` service."""
+
+    def start_job(self, command: list[str], *, cwd: str, owner: str) -> JobRecord: ...
+
+    def get_job(self, job_id: str) -> JobRecord | None: ...
+
+    def list_jobs(self, owner: str | None = None) -> list[JobRecord]: ...
+
+    def write_stdin(self, job_id: str, data: str) -> JobRecord: ...
+
+    def read_output(self, job_id: str, offset: int = 0) -> tuple[str, int]: ...
+
+    def wait_job(self, job_id: str, timeout_seconds: float) -> JobRecord: ...
+
+    def stop_job(self, job_id: str) -> JobRecord: ...
+
+    def drain_events(self) -> list[dict[str, Any]]: ...
+
+    def shutdown_jobs(self) -> None: ...
 
     def get_plugin_info(self) -> dict[str, str]: ...
 

@@ -22,6 +22,9 @@ ToolErrorCode = Literal[
     "goal_revision_mismatch",
     "completion_rejected",
     "blocker_not_established",
+    "job_not_found",
+    "job_not_running",
+    "timeout",
     "internal_error",
 ]
 
