@@ -795,8 +795,10 @@ git commit -m "feat: gate goal completion on fresh verified evidence"
 新建 `tests/test_goal_store.py`：
 
 ```python
+
 """Tests for the SQLite goal store."""
 # mypy: ignore-errors
+# pyright: reportOptionalMemberAccess=false
 
 from __future__ import annotations
 
@@ -944,6 +946,33 @@ def test_recording_evidence_does_not_advance_the_revision(tmp_path: Path) -> Non
     assert updated.revision == goal.revision
 
 
+def test_updating_an_unknown_goal_is_a_conflict(tmp_path: Path) -> None:
+    with pytest.raises(GoalConflictError):
+        store(tmp_path).update_goal("nope", expected_revision=1, status="complete")
+
+
+def test_recording_evidence_for_an_unknown_goal_is_a_conflict(tmp_path: Path) -> None:
+    with pytest.raises(GoalConflictError):
+        store(tmp_path).set_criterion_evidence("nope", {"c1": "x"})
+
+
+def test_invalidate_closes_the_connection_and_is_idempotent(tmp_path: Path) -> None:
+    plugin = store(tmp_path)
+    plugin.create_goal("o", [])
+    assert plugin._connection is not None
+    plugin._invalidate(None)
+    assert plugin._connection is None
+    # A second call must not raise on the already-closed connection.
+    plugin._invalidate(None)
+
+
+def test_the_store_reopens_after_invalidate(tmp_path: Path) -> None:
+    plugin = store(tmp_path)
+    goal = plugin.create_goal("durable", [])
+    plugin._invalidate(None)
+    assert plugin.get_goal(goal.id).objective == "durable"
+
+
 def test_plugin_info_reports_the_component_identity(tmp_path: Path) -> None:
     assert store(tmp_path).get_plugin_info() == {
         "name": "sqlite-goal",
@@ -961,6 +990,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'langharness_core.plugi
 `src/langharness_core/plugins/goals/sqlite.py`：
 
 ```python
+
 """Durable goal state with revision compare-and-swap.
 
 Sync ``sqlite3`` on purpose: tools run in LangChain's thread pool, and a sync
@@ -984,7 +1014,6 @@ from langharness_core.contracts import (
     AcceptanceCriterion,
     Goal,
     GoalProvider,
-    GoalStatus,
 )
 
 BLOCKER_THRESHOLD = 3
@@ -1003,7 +1032,9 @@ CREATE TABLE IF NOT EXISTS goals (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS goals_status ON goals (status, rowid);
+-- Not on rowid: SQLite refuses to index the rowid pseudocolumn, and the
+-- newest-goal lookup orders by it rather than filtering on it.
+CREATE INDEX IF NOT EXISTS goals_status ON goals (status);
 """
 
 
@@ -1087,13 +1118,13 @@ class SQLiteGoalPlugin:
                 ),
             )
             connection.commit()
-            row = self._select(connection, goal_id)
+            row = self._require(connection, goal_id)
         return _row_to_goal(row)
 
     def get_goal(self, goal_id: str) -> Goal | None:
         with self._lock:
             connection = self._connection_or_open()
-            row = self._select(connection, goal_id)
+            row = self._find(connection, goal_id)
         return _row_to_goal(row) if row is not None else None
 
     def current_goal(self) -> Goal | None:
@@ -1120,9 +1151,7 @@ class SQLiteGoalPlugin:
     ) -> Goal:
         with self._lock:
             connection = self._connection_or_open()
-            row = self._select(connection, goal_id)
-            if row is None:
-                raise GoalConflictError(f"unknown goal {goal_id!r}")
+            row = self._require(connection, goal_id)
             if row["revision"] != expected_revision:
                 raise GoalConflictError(
                     f"goal {goal_id!r} is at revision {row['revision']}, "
@@ -1149,7 +1178,7 @@ class SQLiteGoalPlugin:
                 ),
             )
             connection.commit()
-            updated = self._select(connection, goal_id)
+            updated = self._require(connection, goal_id)
         return _row_to_goal(updated)
 
     def set_criterion_evidence(
@@ -1163,9 +1192,7 @@ class SQLiteGoalPlugin:
         """
         with self._lock:
             connection = self._connection_or_open()
-            row = self._select(connection, goal_id)
-            if row is None:
-                raise GoalConflictError(f"unknown goal {goal_id!r}")
+            row = self._require(connection, goal_id)
             criteria = json.loads(row["acceptance_criteria"])
             for item in criteria:
                 replacement = evidence.get(item["id"])
@@ -1176,16 +1203,28 @@ class SQLiteGoalPlugin:
                 (json.dumps(criteria), goal_id),
             )
             connection.commit()
-            updated = self._select(connection, goal_id)
+            updated = self._require(connection, goal_id)
         return _row_to_goal(updated)
 
     def get_plugin_info(self) -> dict[str, str]:
         return {"name": self._plugin_name, "version": self._plugin_version}
 
     @staticmethod
-    def _select(connection: sqlite3.Connection, goal_id: str) -> sqlite3.Row | None:
+    def _find(connection: sqlite3.Connection, goal_id: str) -> sqlite3.Row | None:
         cursor = connection.execute("SELECT * FROM goals WHERE id = ?", (goal_id,))
         row: sqlite3.Row | None = cursor.fetchone()
+        return row
+
+    def _require(self, connection: sqlite3.Connection, goal_id: str) -> sqlite3.Row:
+        """The row for an id the caller is about to write to.
+
+        Splitting this from :meth:`_find` keeps the read path honest about
+        returning ``None`` while the write paths get a value they can use
+        without every one of them repeating a null check.
+        """
+        row = self._find(connection, goal_id)
+        if row is None:
+            raise GoalConflictError(f"unknown goal {goal_id!r}")
         return row
 
     def _connection_or_open(self) -> sqlite3.Connection:
