@@ -27,6 +27,7 @@ from langharness_core.contracts import (
     SPEC_SYSTEM_PROMPT,
     SPEC_TOOL,
     SPEC_TRANSFORMERS,
+    SPEC_WORKSPACE,
 )
 from langharness_core.plugins.agents.export import AGENT_TOOL_EXPORTS
 from langharness_plugin.contracts import SPEC_TOOL_EXPORT_TARGET
@@ -48,6 +49,11 @@ AGENT_PLUGIN_CATALOG: dict[str, tuple[str, str, str]] = {
         "langharness_core.plugins.name.template_name",
         "agent-name-plugin-factory",
         SPEC_NAME,
+    ),
+    "workspace": (
+        "langharness_core.plugins.workspace.root",
+        "workspace-root-plugin-factory",
+        SPEC_WORKSPACE,
     ),
 }
 
@@ -170,6 +176,13 @@ AGENT_PLUGIN_DESCRIPTIONS: dict[str, str] = {
         "Names the agent in UI and prompts. Implements agent.plugin.name. "
         "Properties: plugin.agent_name, plugin.agent_id. Requires a restart "
         "for property changes. Uninstall when the agent is removed."
+    ),
+    "workspace": (
+        "Pins the workspace realpath shared by prompt sections, file tools and "
+        "command execution for one agent scope. Implements "
+        "agent.plugin.workspace. Properties: plugin.workspace.root_dir, "
+        "plugin.agent_id. Requires a restart for property changes. Uninstall "
+        "when the agent is removed."
     ),
     "agent-loop": (
         "Runs the agent loop for one agent scope. Implements "
@@ -442,6 +455,11 @@ def builtin_package() -> PluginPackage:
             ),
             PluginContribution(
                 "name-template", "agent", agent_plugin_template_descriptor("name")
+            ),
+            PluginContribution(
+                "workspace-template",
+                "agent",
+                agent_plugin_template_descriptor("workspace"),
             ),
             PluginContribution(
                 "agent-loop-template", "agent", agent_loop_template_descriptor()
