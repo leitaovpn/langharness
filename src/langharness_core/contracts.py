@@ -33,6 +33,8 @@ SPEC_AGENT_SERVER = "agent.server"
 SPEC_PROMPT_SECTION = "agent.plugin.prompt_section"
 SPEC_WORKSPACE = "agent.plugin.workspace"
 SPEC_WORKSPACE_STATE = "agent.plugin.workspace_state"
+SPEC_GOAL = "agent.plugin.goal"
+SPEC_VERIFIER = "agent.plugin.verifier"
 ModelProtocol = Literal["anthropic", "chat", "responses"]
 
 ALL_PLUGIN_SPECS = (
@@ -54,6 +56,8 @@ ALL_PLUGIN_SPECS = (
     SPEC_PROMPT_SECTION,
     SPEC_WORKSPACE,
     SPEC_WORKSPACE_STATE,
+    SPEC_GOAL,
+    SPEC_VERIFIER,
     SPEC_AGENT_LOOP,
     SPEC_SESSION_INDEX,
     SPEC_AGENT_REGISTRY,
@@ -105,6 +109,82 @@ class MutationRecord:
     tool: str
     before_sha256: str | None
     after_sha256: str | None
+
+
+GoalStatus = Literal[
+    "active", "awaiting_user", "verifying", "complete", "blocked", "cancelled"
+]
+TERMINAL_GOAL_STATUSES: frozenset[str] = frozenset(
+    {"complete", "blocked", "cancelled"}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class AcceptanceCriterion:
+    """One thing the user asked for, and the evidence that it holds.
+
+    ``evidence`` names a tool call id, a file hash, a test case, or the literal
+    ``"manual/user_review"``. A criterion with no evidence can never satisfy
+    the host, which is what stops "it works" from counting.
+    """
+
+    id: str
+    text: str
+    evidence: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Goal:
+    """A durable objective plus the bookkeeping that gates its completion."""
+
+    id: str
+    revision: int
+    objective: str
+    acceptance_criteria: tuple[AcceptanceCriterion, ...]
+    status: GoalStatus
+    rounds_started: int
+    max_rounds: int
+    mutation_generation: int
+    blocker_history: tuple[str, ...]
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class VerificationCheck:
+    """One gate command the host ran, and how it ended."""
+
+    name: str
+    command: tuple[str, ...]
+    exit_code: int
+    stdout_digest: str
+    duration_ms: int
+
+
+@dataclass(frozen=True, slots=True)
+class VerificationArtifact:
+    """A workspace file the goal produced, pinned at a content hash."""
+
+    path: str
+    sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class VerificationReport:
+    """What the host observed when it verified one goal revision.
+
+    Only the summary lives here; full command output stays in the audit log so
+    verification noise cannot crowd out the conversation.
+    """
+
+    id: str
+    goal_revision: int
+    mutation_generation: int
+    started_at: str
+    finished_at: str
+    checks: tuple[VerificationCheck, ...]
+    artifacts: tuple[VerificationArtifact, ...]
+    passed: bool
 
 
 @service_contract(SPEC_LLM)
@@ -188,6 +268,45 @@ class WorkspaceStateProvider(Protocol):
     ) -> int: ...
 
     def mutations(self, since: int = 0) -> list[MutationRecord]: ...
+
+    def get_plugin_info(self) -> dict[str, str]: ...
+
+
+@service_contract(SPEC_GOAL)
+@runtime_checkable
+class GoalProvider(Protocol):
+    """Contract implemented by every ``agent.plugin.goal`` service."""
+
+    def create_goal(
+        self,
+        objective: str,
+        acceptance_criteria: list[dict[str, str]],
+        *,
+        max_rounds: int = 32,
+    ) -> Goal: ...
+
+    def get_goal(self, goal_id: str) -> Goal | None: ...
+
+    def current_goal(self) -> Goal | None: ...
+
+    def update_goal(
+        self,
+        goal_id: str,
+        *,
+        expected_revision: int,
+        status: str | None = None,
+        blocker: str | None = None,
+    ) -> Goal: ...
+
+    def get_plugin_info(self) -> dict[str, str]: ...
+
+
+@service_contract(SPEC_VERIFIER)
+@runtime_checkable
+class VerificationProvider(Protocol):
+    """Contract implemented by every ``agent.plugin.verifier`` service."""
+
+    def verify(self, goal_revision: int) -> VerificationReport: ...
 
     def get_plugin_info(self) -> dict[str, str]: ...
 
