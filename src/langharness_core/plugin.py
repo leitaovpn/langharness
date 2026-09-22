@@ -29,6 +29,7 @@ from langharness_core.contracts import (
     SPEC_TOOL,
     SPEC_TRANSFORMERS,
     SPEC_WORKSPACE,
+    SPEC_WORKSPACE_STATE,
 )
 from langharness_core.plugins.agents.export import AGENT_TOOL_EXPORTS
 from langharness_plugin.contracts import SPEC_TOOL_EXPORT_TARGET
@@ -65,6 +66,16 @@ AGENT_PLUGIN_CATALOG: dict[str, tuple[str, str, str]] = {
         "langharness_core.plugins.prompts.code_agent",
         "code-agent-prompt-plugin-factory",
         SPEC_PROMPT_SECTION,
+    ),
+    "workspace-state": (
+        "langharness_core.plugins.workspace.state",
+        "workspace-state-plugin-factory",
+        SPEC_WORKSPACE_STATE,
+    ),
+    "code-tools": (
+        "langharness_core.plugins.tools.code_workspace",
+        "code-workspace-tools-plugin-factory",
+        SPEC_TOOL,
     ),
 }
 
@@ -209,6 +220,19 @@ AGENT_PLUGIN_DESCRIPTIONS: dict[str, str] = {
         "completion prompt sections. Implements agent.plugin.prompt_section. "
         "Properties: plugin.agent_id. Requires a restart for property changes. "
         "Uninstall when the agent is removed."
+    ),
+    "workspace-state": (
+        "Counts workspace writes so verification reports can be tied to the "
+        "generation they describe. Implements agent.plugin.workspace_state. "
+        "Properties: plugin.workspace.root_dir, plugin.agent_id. Requires a "
+        "restart for property changes. Uninstall when the agent is removed."
+    ),
+    "code-tools": (
+        "Provides the code agent's bounded read, search, patch-editing and "
+        "git-status tools. Implements agent.plugin.tools. Properties: "
+        "plugin.tools.max_read_bytes, plugin.tools.max_entries, "
+        "plugin.agent_id. Requires a restart for property changes. Uninstall "
+        "when the agent is removed."
     ),
     "agent-loop": (
         "Runs the agent loop for one agent scope. Implements "
@@ -496,6 +520,16 @@ def builtin_package() -> PluginPackage:
                 "code-agent-prompt-template",
                 "agent",
                 agent_plugin_template_descriptor("prompt"),
+            ),
+            PluginContribution(
+                "workspace-state-template",
+                "agent",
+                agent_plugin_template_descriptor("workspace-state"),
+            ),
+            PluginContribution(
+                "code-tools-template",
+                "agent",
+                agent_plugin_template_descriptor("code-tools"),
             ),
             PluginContribution(
                 "agent-loop-template", "agent", agent_loop_template_descriptor()
