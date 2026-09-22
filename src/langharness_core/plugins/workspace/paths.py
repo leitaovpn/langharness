@@ -49,11 +49,13 @@ def resolve_workspace_path(root: str | Path, raw: str | None) -> WorkspacePath:
     A blank path means the workspace root, which is what a directory listing
     without arguments should show.
     """
-    base = Path(root).resolve()
     text = (raw or "").strip()
-    candidate = Path(text) if text else base
-    absolute = candidate if candidate.is_absolute() else base / candidate
     try:
+        # The root is resolved here too: a tool must never turn an I/O failure
+        # into a traceback, whichever end of the join caused it.
+        base = Path(root).resolve()
+        candidate = Path(text) if text else base
+        absolute = candidate if candidate.is_absolute() else base / candidate
         resolved = absolute.resolve()
     except OSError as exc:
         raise WorkspacePathError(

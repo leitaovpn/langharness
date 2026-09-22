@@ -36,7 +36,7 @@ def test_no_workspace_provider_means_no_tools() -> None:
 def test_tool_names_are_stable(tmp_path: Path) -> None:
     # Grows by one name per task: search_text (Task 4), apply_patch (Task 6),
     # workspace_status (Task 7).
-    assert set(tools(tmp_path)) == {"list_directory", "read_file"}
+    assert set(tools(tmp_path)) == {"list_directory", "read_file", "search_text"}
 
 
 def test_list_directory_reports_entries_and_types(tmp_path: Path) -> None:
@@ -127,6 +127,61 @@ def test_read_file_refuses_binary_content(tmp_path: Path) -> None:
     result = tools(tmp_path)["read_file"].invoke({"path": "blob.bin"})
     assert result["error"]["code"] == "not_a_file"
     assert "binary" in result["error"]["message"]
+
+
+def test_read_file_rejects_a_traversal(tmp_path: Path) -> None:
+    result = tools(tmp_path)["read_file"].invoke({"path": "../../etc/passwd"})
+    assert result["error"]["code"] == "path_outside_workspace"
+
+
+def test_read_file_rejects_a_symlink_escape(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir(exist_ok=True)
+    (outside / "secret.txt").write_text("classified\n", encoding="utf-8")
+    (tmp_path / "link").symlink_to(outside, target_is_directory=True)
+    result = tools(tmp_path)["read_file"].invoke({"path": "link/secret.txt"})
+    assert result["error"]["code"] == "path_outside_workspace"
+
+
+def test_read_file_reports_a_dangling_symlink(tmp_path: Path) -> None:
+    (tmp_path / "dangling.py").symlink_to(tmp_path / "nowhere.py")
+    result = tools(tmp_path)["read_file"].invoke({"path": "dangling.py"})
+    assert result["error"]["code"] == "path_not_found"
+
+
+def test_read_file_reports_an_unreadable_file(tmp_path: Path) -> None:
+    target = tmp_path / "secret.py"
+    write(target, "x\n")
+    target.chmod(0o000)
+    try:
+        result = tools(tmp_path)["read_file"].invoke({"path": "secret.py"})
+    finally:
+        target.chmod(0o600)
+    assert result["error"]["code"] == "path_not_found"
+
+
+def test_list_directory_survives_an_unstattable_entry(tmp_path: Path) -> None:
+    # A dangling symlink stats fine but has no size of its own.
+    (tmp_path / "dangling").symlink_to(tmp_path / "nowhere")
+    result = tools(tmp_path)["list_directory"].invoke({})
+    entry = next(item for item in result["entries"] if item["name"] == "dangling")
+    assert entry["type"] == "symlink"
+    assert entry["size"] == 0
+
+
+def test_search_text_rejects_an_invalid_regex(tmp_path: Path) -> None:
+    result = tools(tmp_path)["search_text"].invoke({"query": "("})
+    assert result["error"]["code"] == "invalid_arguments"
+
+
+def test_search_text_returns_matches(tmp_path: Path) -> None:
+    write(tmp_path / "a.py", "needle\n")
+    result = tools(tmp_path)["search_text"].invoke({"query": "needle", "glob": "*.py"})
+    assert result["matches"] == [
+        {"path": "a.py", "line": 1, "column": 1, "text": "needle"}
+    ]
+    assert result["engine"] == "python"
+    assert result["truncated"] is False
 
 
 def test_presentations_name_only_arguments_the_tools_take(tmp_path: Path) -> None:

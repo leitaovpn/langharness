@@ -71,6 +71,18 @@ def test_is_dir_and_is_file_report_the_target(tmp_path: Path) -> None:
     assert resolve_workspace_path(tmp_path, "f").is_file is True
 
 
+def test_an_unresolvable_path_reports_not_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(self: Path, **kwargs: object) -> Path:
+        raise OSError("too many levels of symbolic links")
+
+    monkeypatch.setattr(Path, "resolve", boom)
+    with pytest.raises(WorkspacePathError) as caught:
+        resolve_workspace_path(tmp_path, "a.py")
+    assert caught.value.code == "path_not_found"
+
+
 def test_error_maps_to_the_shared_tool_error_shape() -> None:
     error = to_tool_error(WorkspacePathError("path_not_found", "gone"))
     assert error["error"]["code"] == "path_not_found"

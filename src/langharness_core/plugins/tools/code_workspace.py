@@ -23,6 +23,7 @@ from langharness_core.contracts import (
     WorkspaceProvider,
     WorkspaceStateProvider,
 )
+from langharness_core.plugins.tools import search as search_module
 from langharness_core.plugins.workspace.paths import (
     WorkspacePathError,
     resolve_workspace_path,
@@ -50,6 +51,13 @@ class ReadFileArgs(BaseModel):
         default=0,
         ge=0,
         description="Maximum lines to return. 0 means every line from offset.",
+    )
+
+
+class SearchTextArgs(BaseModel):
+    query: str = Field(min_length=1, description="Python regular expression to find.")
+    glob: str | None = Field(
+        default=None, description="Optional filename glob, e.g. '*.py'."
     )
 
 
@@ -118,7 +126,7 @@ class CodeWorkspaceToolsPlugin:
     def get_tools(self) -> list[Any]:
         if self._workspace is None:
             return []
-        return [self._list_tool(), self._read_tool()]
+        return [self._list_tool(), self._read_tool(), self._search_tool()]
 
     def get_tool_presentations(self) -> dict[str, str]:
         """Headlines for the CLI transcript.
@@ -130,6 +138,7 @@ class CodeWorkspaceToolsPlugin:
         return {
             "list_directory": "list_directory({path})",
             "read_file": "read_file({path})",
+            "search_text": "search_text({query})",
         }
 
     def _root(self) -> Path:
@@ -246,4 +255,51 @@ class CodeWorkspaceToolsPlugin:
                 "details}}."
             ),
             args_schema=ReadFileArgs,
+        )
+
+    def _search_tool(self) -> StructuredTool:
+        plugin = self
+
+        def search_text(query: str, glob: str | None = None) -> dict[str, Any]:
+            try:
+                outcome = search_module.search_workspace(
+                    plugin._root(), query, glob=glob
+                )
+            except search_module.SearchPatternError as exc:
+                return tool_error("invalid_arguments", str(exc))
+            return {
+                "query": query,
+                "matches": [
+                    {
+                        "path": item.path,
+                        "line": item.line,
+                        "column": item.column,
+                        "text": item.text,
+                    }
+                    for item in outcome.matches
+                ],
+                "files_scanned": outcome.files_scanned,
+                "truncated": outcome.truncated,
+                "engine": outcome.engine,
+            }
+
+        return StructuredTool.from_function(
+            func=search_text,
+            name="search_text",
+            description=(
+                "Search file contents across the workspace with a Python "
+                "regular expression. Use it to locate call sites, definitions "
+                "and configuration instead of walking directories by hand. "
+                "Common vendored and cache directories (.git, .venv, "
+                "node_modules, __pycache__, dist, build) are skipped, as are "
+                "binary and oversized files, so a zero-result search means "
+                "'not found in searchable files', not 'not anywhere'. Results "
+                'are capped; check \'truncated\'. Returns {"query": str, '
+                '"matches": [{"path": str, "line": int, "column": int, '
+                '"text": str}], "files_scanned": int, "truncated": bool, '
+                '"engine": \'python\'|\'ripgrep\'}, or {"error": {code, '
+                "message, retryable, details}} when the query is not a valid "
+                "regular expression."
+            ),
+            args_schema=SearchTextArgs,
         )
