@@ -23,16 +23,21 @@ from langharness_core.contracts import (
     AgentRegistryProvider,
 )
 from langharness_core.plugin import (
+    AGENT_LOOP_MODULE,
     AGENT_PLUGIN_CATALOG,
     DEFAULT_AGENT_PLUGINS,
+    PRESET_PLUGIN_KEY,
     agent_binding_properties,
     agent_filter,
     agent_loop_descriptor,
     agent_loop_properties,
     agent_plugin_descriptor,
+    agent_preset_bindings,
+    agent_preset_modules,
     agent_required_modules,
     agent_scoped_specifications,
     default_llm_properties,
+    preset_name_of,
 )
 from langharness_plugin.contracts import ScopedPluginRegistrar
 from langharness_plugin.registry import PluginInstanceSnapshot
@@ -276,14 +281,27 @@ class AgentDirectoryPlugin:
         self._default_llm = snapshot
 
     def _bindings(self, agent_id: str) -> dict[str, dict[str, Any]]:
+        """Effective plugin bindings: the preset's baseline, then overrides.
+
+        An explicit entry wins over the preset; ``enabled: false`` removes a
+        plugin the preset would otherwise turn on.
+        """
         stored = self._configs.get(agent_id)
         if stored is None:
             return {plugin: {"enabled": True} for plugin in DEFAULT_AGENT_PLUGINS}
-        return {
-            name: dict(entry)
-            for name, entry in stored.items()
-            if entry.get("enabled", True)
+        preset = preset_name_of(stored)
+        baseline = agent_preset_bindings(preset) if preset is not None else ()
+        bindings: dict[str, dict[str, Any]] = {
+            name: {"enabled": True} for name in baseline
         }
+        for name, entry in stored.items():
+            if name == PRESET_PLUGIN_KEY:
+                continue
+            if entry.get("enabled", True):
+                bindings[name] = dict(entry)
+            else:
+                bindings.pop(name, None)
+        return bindings
 
     def _materialize(self, agent: dict[str, Any]) -> None:
         agent_id = agent["id"]
@@ -291,9 +309,14 @@ class AgentDirectoryPlugin:
             return
         self._ensure_default_llm()
         bindings = self._bindings(agent_id)
-        required = list(agent_required_modules())
+        preset = preset_name_of(self._configs.get(agent_id, {}))
+        required = (
+            [*agent_preset_modules(preset), AGENT_LOOP_MODULE]
+            if preset is not None
+            else list(agent_required_modules())
+        )
         if "llm" in bindings:
-            required.append(AGENT_PLUGIN_CATALOG["llm"][0])
+            required = [*required, AGENT_PLUGIN_CATALOG["llm"][0]]
         missing = [
             module
             for module in required
@@ -321,7 +344,9 @@ class AgentDirectoryPlugin:
                     continue
                 descriptor = agent_plugin_descriptor(plugin)
                 snapshot = self._scope.create_instance(
-                    descriptor.factory, descriptor.module, scope_id,
+                    descriptor.factory,
+                    descriptor.module,
+                    scope_id,
                     properties=properties,
                 )
                 created[plugin] = snapshot

@@ -24,6 +24,7 @@ from langharness_core.contracts import (
     SPEC_NAME,
     SPEC_PROMPT_SECTION,
     SPEC_RESPONSE_FORMAT,
+    SPEC_RUN_CONTROLLER,
     SPEC_SESSION_INDEX,
     SPEC_STATE_SCHEMA,
     SPEC_STORE,
@@ -105,9 +106,46 @@ AGENT_PLUGIN_CATALOG: dict[str, tuple[str, str, str]] = {
         "exec-tools-plugin-factory",
         SPEC_TOOL,
     ),
+    "run-controller": (
+        "langharness_core.plugins.controller.goal_round",
+        "goal-round-controller-plugin-factory",
+        SPEC_RUN_CONTROLLER,
+    ),
+    "verify-tool": (
+        "langharness_core.plugins.goals.verify_tool",
+        "verify-tool-plugin-factory",
+        SPEC_TOOL,
+    ),
+    "ask-user": (
+        "langharness_core.plugins.goals.ask_user",
+        "ask-user-plugin-factory",
+        SPEC_TOOL,
+    ),
 }
 
 DEFAULT_AGENT_PLUGINS: tuple[str, ...] = ("tools", "name")
+
+AGENT_PRESETS: dict[str, tuple[str, ...]] = {
+    "simple": DEFAULT_AGENT_PLUGINS,
+    "code": (
+        "name",
+        "workspace",
+        "workspace-state",
+        "code-tools",
+        "exec",
+        "exec-tools",
+        "repository-instructions",
+        "prompt",
+        "goal",
+        "goal-tools",
+        "verify-tool",
+        "ask-user",
+        "verifier",
+        "run-controller",
+    ),
+}
+PRESET_PLUGIN_KEY = "preset"
+PRESET_NAME_PROPERTY = "preset.name"
 
 DYNAMIC_PLUGIN_CATALOG: dict[str, tuple[str, str, str]] = {
     "cache-plugin": (
@@ -207,6 +245,7 @@ AGENT_LOOP_FIELDS: dict[str, str] = {
     SPEC_TRANSFORMERS: "_transformers_providers",
     SPEC_INTERRUPT_BEFORE: "_interrupt_before_providers",
     SPEC_INTERRUPT_AFTER: "_interrupt_after_providers",
+    SPEC_RUN_CONTROLLER: "_run_controller",
 }
 
 AGENT_PLUGIN_DESCRIPTIONS: dict[str, str] = {
@@ -298,6 +337,24 @@ AGENT_PLUGIN_DESCRIPTIONS: dict[str, str] = {
         "plugin.exec.max_timeout_seconds, plugin.agent_id. Requires a restart "
         "for property changes. Uninstall when the agent is removed."
     ),
+    "run-controller": (
+        "Decides whether an active goal should continue for another model "
+        "round, await user input, or stop. Implements "
+        "agent.plugin.run_controller. Properties: plugin.agent_id. Requires "
+        "a restart for property changes. Uninstall when the agent is removed."
+    ),
+    "verify-tool": (
+        "Exposes the verify tool so an agent can run project gates before it "
+        "submits goal completion. Implements agent.plugin.tools. Properties: "
+        "plugin.agent_id. Requires a restart for property changes. Uninstall "
+        "when the agent is removed."
+    ),
+    "ask-user": (
+        "Exposes ask_user, which records that an active goal is awaiting real "
+        "user input. Implements agent.plugin.tools. Properties: "
+        "plugin.agent_id. Requires a restart for property changes. Uninstall "
+        "when the agent is removed."
+    ),
     "agent-loop": (
         "Runs the agent loop for one agent scope. Implements "
         "agent.plugin.agent_loop. Properties: plugin.agent_id and "
@@ -362,6 +419,34 @@ def agent_required_modules() -> list[str]:
     modules = [AGENT_PLUGIN_CATALOG[plugin][0] for plugin in DEFAULT_AGENT_PLUGINS]
     modules.append(AGENT_LOOP_MODULE)
     return list(dict.fromkeys(modules))
+
+
+def agent_preset_bindings(preset: str) -> tuple[str, ...]:
+    """The plugin names a preset turns on; unknown names fall back to simple."""
+    return AGENT_PRESETS.get(preset, AGENT_PRESETS["simple"])
+
+
+def agent_preset_modules(preset: str) -> list[str]:
+    """The bundle modules a preset needs installed before it can materialize."""
+    return list(
+        dict.fromkeys(
+            AGENT_PLUGIN_CATALOG[name][0]
+            for name in agent_preset_bindings(preset)
+            if name in AGENT_PLUGIN_CATALOG
+        )
+    )
+
+
+def preset_name_of(plugins: dict[str, Any]) -> str | None:
+    """Read the preset an agent configuration selected, if any."""
+    entry = plugins.get(PRESET_PLUGIN_KEY)
+    if not isinstance(entry, dict):
+        return None
+    properties = entry.get("properties")
+    if not isinstance(properties, dict):
+        return None
+    name = properties.get(PRESET_NAME_PROPERTY)
+    return str(name) if name else None
 
 
 def agent_filter(agent_id: str) -> str:
@@ -551,12 +636,8 @@ def builtin_package() -> PluginPackage:
             PluginContribution(
                 "sqlite-checkpointer", "server", sqlite_checkpointer_descriptor()
             ),
-            PluginContribution(
-                "session-index", "server", session_index_descriptor()
-            ),
-            PluginContribution(
-                "agent-registry", "server", agent_registry_descriptor()
-            ),
+            PluginContribution("session-index", "server", session_index_descriptor()),
+            PluginContribution("agent-registry", "server", agent_registry_descriptor()),
             PluginContribution(
                 "agent-directory", "server", agent_directory_descriptor()
             ),
@@ -615,6 +696,21 @@ def builtin_package() -> PluginPackage:
                 "exec-tools-template",
                 "agent",
                 agent_plugin_template_descriptor("exec-tools"),
+            ),
+            PluginContribution(
+                "verify-tool-template",
+                "agent",
+                agent_plugin_template_descriptor("verify-tool"),
+            ),
+            PluginContribution(
+                "ask-user-template",
+                "agent",
+                agent_plugin_template_descriptor("ask-user"),
+            ),
+            PluginContribution(
+                "run-controller-template",
+                "agent",
+                agent_plugin_template_descriptor("run-controller"),
             ),
             PluginContribution(
                 "agent-loop-template", "agent", agent_loop_template_descriptor()

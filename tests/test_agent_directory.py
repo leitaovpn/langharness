@@ -87,8 +87,13 @@ class FakeScope:
         self._counter += 1
         instance = f"uuid-{self._counter}"
         snapshot = PluginInstanceSnapshot(
-            instance, factory, module, scope_id or ROOT_SCOPE_ID,
-            dict(properties or {}), enabled, ranking,
+            instance,
+            factory,
+            module,
+            scope_id or ROOT_SCOPE_ID,
+            dict(properties or {}),
+            enabled,
+            ranking,
             "active" if enabled else "disabled",
         )
         self.instances[instance] = snapshot
@@ -111,7 +116,10 @@ class FakeScope:
         if properties is not None:
             merged.update(properties)
         updated = PluginInstanceSnapshot(
-            instance, current.factory, current.module, current.scope_id,
+            instance,
+            current.factory,
+            current.module,
+            current.scope_id,
             merged,
             current.enabled if enabled is None else enabled,
             current.ranking if ranking is None else ranking,
@@ -132,7 +140,8 @@ class FakeScope:
         enabled: bool | None = None,
     ) -> tuple[PluginInstanceSnapshot, ...]:
         return tuple(
-            item for item in self.instances.values()
+            item
+            for item in self.instances.values()
             if (factory is None or item.factory == factory)
             and (module is None or item.module == module)
             and (scope_id is None or item.scope_id == scope_id)
@@ -162,9 +171,9 @@ class FakeScope:
 
     def scope_filter(self, scope_id: ScopeId) -> str:
         visible = self.tree.ancestors(scope_id, include_self=True)
-        return "(|" + "".join(
-            f"(plugin.scope_id={scope.id})" for scope in visible
-        ) + ")"
+        return (
+            "(|" + "".join(f"(plugin.scope_id={scope.id})" for scope in visible) + ")"
+        )
 
     def remove_scope(self, scope_id: ScopeId, *, recursive: bool = False) -> None:
         self.tree.remove(scope_id, recursive=recursive)
@@ -172,9 +181,7 @@ class FakeScope:
     def find_service(self, specification: str, filter: str | None = None) -> Any:
         return self.services.get((specification, filter))
 
-    def find_services(
-        self, specification: str, filter: str | None = None
-    ) -> list[Any]:
+    def find_services(self, specification: str, filter: str | None = None) -> list[Any]:
         service = self.find_service(specification, filter)
         return [] if service is None else [service]
 
@@ -182,9 +189,7 @@ class FakeScope:
         return {"applied": sorted(overrides), "restart_required": []}
 
     def by_factory(self, factory: str) -> list[PluginInstanceSnapshot]:
-        return [
-            item for item in self.instances.values() if item.factory == factory
-        ]
+        return [item for item in self.instances.values() if item.factory == factory]
 
 
 class FakeRegistry:
@@ -271,7 +276,8 @@ def with_agent_id(
     scope: FakeScope, factory: str, agent_id: str
 ) -> PluginInstanceSnapshot:
     matches = [
-        item for item in scope.by_factory(factory)
+        item
+        for item in scope.by_factory(factory)
         if item.properties.get("plugin.agent_id") == agent_id
     ]
     assert len(matches) == 1, f"expected one {factory} for {agent_id}"
@@ -312,6 +318,7 @@ def test_validate_materializes_default_plugins_and_loop() -> None:
         "_name_provider": visibility,
         "_prompt_section_providers": visibility,
         "_workspace_provider": visibility,
+        "_run_controller": visibility,
     }
 
 
@@ -498,7 +505,10 @@ def test_apply_agent_config_skips_disabled_bindings() -> None:
         FACTORIES["name"],
         FACTORIES["agent-loop"],
     }
-    assert only(plugin._scope, FACTORIES["name"]).properties["plugin.agent_name"] == "Custom"
+    assert (
+        only(plugin._scope, FACTORIES["name"]).properties["plugin.agent_name"]
+        == "Custom"
+    )
 
 
 def test_apply_agent_config_ignores_unknown_plugins() -> None:
@@ -530,7 +540,14 @@ def test_ensure_plugin_instance_request_overrides_stored_defaults() -> None:
     plugin = make_directory()
     plugin.apply_agent_config(
         "simple_agent",
-        {"llm": {"properties": {"plugin.model.name": "stored", "plugin.model.base_url": "u"}}},
+        {
+            "llm": {
+                "properties": {
+                    "plugin.model.name": "stored",
+                    "plugin.model.base_url": "u",
+                }
+            }
+        },
     )
 
     plugin.ensure_plugin_instance("simple_agent", "llm", {"plugin.model.name": "asked"})
@@ -718,7 +735,10 @@ def test_empty_llm_binding_inherits_providers_default() -> None:
     )
 
     snapshot = with_agent_id(plugin._scope, FACTORIES["llm"], "simple_agent")
-    assert snapshot.properties == {**DEFAULT_PROVIDER_MAPPED, "plugin.agent_id": "simple_agent"}
+    assert snapshot.properties == {
+        **DEFAULT_PROVIDER_MAPPED,
+        "plugin.agent_id": "simple_agent",
+    }
 
 
 def test_empty_llm_binding_without_default_is_skipped() -> None:
@@ -741,10 +761,7 @@ def test_partial_llm_binding_fills_missing_fields_from_default() -> None:
     snapshot = with_agent_id(plugin._scope, FACTORIES["llm"], "simple_agent")
     assert snapshot.properties["plugin.model.name"] == "stored"
     assert snapshot.properties["plugin.model.api_key"] == "default-key"
-    assert (
-        snapshot.properties["plugin.model.base_url"]
-        == "https://default.example/v1"
-    )
+    assert snapshot.properties["plugin.model.base_url"] == "https://default.example/v1"
     assert snapshot.properties["plugin.model.protocol"] == "chat"
 
 
@@ -774,10 +791,7 @@ def test_ensure_plugin_instance_fills_missing_fields_from_default() -> None:
     snapshot = with_agent_id(plugin._scope, FACTORIES["llm"], "simple_agent")
     assert snapshot.properties["plugin.model.name"] == "request-model"
     assert snapshot.properties["plugin.model.api_key"] == "default-key"
-    assert (
-        snapshot.properties["plugin.model.base_url"]
-        == "https://default.example/v1"
-    )
+    assert snapshot.properties["plugin.model.base_url"] == "https://default.example/v1"
 
 
 def test_ensure_plugin_instance_skips_unconfigured() -> None:
