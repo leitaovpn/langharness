@@ -73,7 +73,7 @@ Required test coverage of 95% reached. Total coverage: 95.58%
     provider smoke 仍按仓库约定跳过。
 - [x] B9 完整质量门：所有 B 项完成后重新运行 `make check`，覆盖率保持至少 95%。
   - 证据：`make check`；Ruff、mypy、Pyright、clean-process imports 全部通过；
-    `1351 passed, 2 skipped`，覆盖率 `95.46%`。
+    `1351 passed, 2 skipped`，覆盖率 `95.42%`。
 
 ## 目标与边界
 
