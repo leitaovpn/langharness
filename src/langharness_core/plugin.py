@@ -23,6 +23,7 @@ from langharness_core.contracts import (
     SPEC_MIDDLEWARE,
     SPEC_NAME,
     SPEC_PROMPT_SECTION,
+    SPEC_PTC_RUNTIME,
     SPEC_RESPONSE_FORMAT,
     SPEC_RUN_CONTROLLER,
     SPEC_SESSION_INDEX,
@@ -641,12 +642,29 @@ def agent_server_descriptor() -> PluginDescriptor:
     )
 
 
+def ptc_runtime_descriptor() -> PluginDescriptor:
+    """Static definition of the shared, stateless Node process runtime."""
+    return PluginDescriptor(
+        name="ptc-runtime",
+        version="1.0.0",
+        module="langharness_core.plugins.presentation.runtime",
+        factory="ptc-runtime-plugin-factory",
+        specification=SPEC_PTC_RUNTIME,
+        description=(
+            "Runs one PTC program in a fresh Node process and dispatches host "
+            "tool calls. Implements agent.plugin.ptc_runtime. Shared stateless "
+            "runtime service; PTC modes fail closed when it is unavailable."
+        ),
+    )
+
+
 def builtin_package() -> PluginPackage:
     """Describe server-scoped core plugins and agent plugin templates."""
     return PluginPackage(
         id="builtin.core",
         version="1.0.0",
         contributions=(
+            PluginContribution("ptc-runtime", "root", ptc_runtime_descriptor()),
             PluginContribution(
                 "sqlite-checkpointer", "server", sqlite_checkpointer_descriptor()
             ),

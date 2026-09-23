@@ -7,10 +7,11 @@ import logging
 from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from langchain.agents import create_agent
 from langchain_core.messages import ToolMessage
+from langchain_core.tools import StructuredTool
 from langgraph.types import Command
 from pelix.ipopo.decorators import (
     BindField,
@@ -40,6 +41,7 @@ from langharness_core.contracts import (  # noqa: I001 - grouped with the block 
     NameProvider,
     PromptSection,
     PromptSectionProvider,
+    PTCRuntimeProvider,
     ResponseFormatProvider,
     RunControllerProvider,
     RunDecision,
@@ -52,6 +54,7 @@ from langharness_core.contracts import (  # noqa: I001 - grouped with the block 
     TransformersProvider,
     WorkspaceProvider,
 )
+from langharness_core.plugins.presentation.sdk import render_tool_sdk
 from langharness_core.plugins.prompts.context import (
     build_prompt_context,
     model_display_name,
@@ -150,6 +153,7 @@ def _iter_interrupts(container: Any) -> Iterator[Any]:
     optional=True,
     immediate_rebind=True,
 )
+@RequiresBest("_ptc_runtime", PTCRuntimeProvider, optional=True, immediate_rebind=True)
 @Requires("_middleware_providers", MiddlewareProvider, aggregate=True, optional=True)
 @Requires(
     "_system_prompt_providers", SystemPromptProvider, aggregate=True, optional=True
@@ -215,6 +219,7 @@ def _iter_interrupts(container: Any) -> Iterator[Any]:
     "_scoped_llm_providers",
     "_tool_providers",
     "_presentation_provider",
+    "_ptc_runtime",
     "_middleware_providers",
     "_system_prompt_providers",
     "_prompt_section_providers",
@@ -238,6 +243,7 @@ class PluginAgentLoop:
         self._scoped_llm_providers: list[Any] = []
         self._tool_providers: list[Any] = []
         self._presentation_provider: Any = None
+        self._ptc_runtime: Any = None
         self._middleware_providers: list[Any] = []
         self._system_prompt_providers: list[Any] = []
         self._prompt_section_providers: list[Any] = []
@@ -264,6 +270,7 @@ class PluginAgentLoop:
             "_presentation_provider": ContractGuard(
                 self, "_presentation_provider", ToolPresentationProvider
             ),
+            "_ptc_runtime": ContractGuard(self, "_ptc_runtime", PTCRuntimeProvider),
             "_middleware_providers": ContractGuard(
                 self, "_middleware_providers", MiddlewareProvider
             ),
@@ -478,6 +485,17 @@ class PluginAgentLoop:
         self._guards[field].release(service)
         self._graph = None
 
+    @BindField("_ptc_runtime", if_valid=True)
+    def _on_ptc_runtime_bind(self, field: str, service: Any, reference: Any) -> None:
+        if not self._guards[field].admit(service):
+            return
+        self._rebuild()
+
+    @UnbindField("_ptc_runtime")
+    def _on_ptc_runtime_unbind(self, field: str, service: Any, reference: Any) -> None:
+        self._guards[field].release(service)
+        self._graph = None
+
     @BindField("_job_manager", if_valid=True)
     def _on_job_manager_bind(self, field: str, service: Any, reference: Any) -> None:
         if not self._guards[field].admit(service):
@@ -650,6 +668,53 @@ class PluginAgentLoop:
         tools: list[Any] = []
         for provider in self._effective(self._tool_providers):
             tools.extend(provider.get_tools())
+        mode = self._presentation_mode()
+        if mode == "native":
+            return tools
+        if self._ptc_runtime is None:
+            raise RuntimeError("PTC runtime is required for this presentation mode")
+        run_code = StructuredTool.from_function(
+            coroutine=self._run_code,
+            name="run_code",
+            description=(
+                "Run TypeScript code to call the tools declared in the program SDK. "
+                "Return only the program result and explicit logs."
+            ),
+        )
+        return [run_code] if mode == "ptc" else [*tools, run_code]
+
+    async def _run_code(
+        self, code: str, description: str = "", timeout_ms: int = 120_000
+    ) -> dict[str, Any]:
+        del description
+        tools = {
+            str(getattr(tool, "name")): tool
+            for tool in self._collect_native_tools()
+            if getattr(tool, "name", None) != "run_code"
+        }
+
+        async def dispatch(name: str, args: Any) -> Any:
+            tool = tools.get(name)
+            if tool is None:
+                raise ValueError(f"Tool {name!r} is not available in this scope")
+            if not isinstance(args, Mapping):
+                raise TypeError("Tool arguments must be an object")
+            return await tool.ainvoke(dict(args))
+
+        return cast(
+            dict[str, Any],
+            await self._ptc_runtime.execute(
+            code=code,
+            sdk=render_tool_sdk(tools.values()),
+            dispatch=dispatch,
+            timeout_ms=timeout_ms,
+            ),
+        )
+
+    def _collect_native_tools(self) -> list[Any]:
+        tools: list[Any] = []
+        for provider in self._effective(self._tool_providers):
+            tools.extend(provider.get_tools())
         return tools
 
     def _presentation_mode(self) -> str:
@@ -778,9 +843,6 @@ class PluginAgentLoop:
         # unavailable" until restart). Clear the graph instead; the next
         # successful rebind rebuilds it.
         try:
-            if self._presentation_mode() != "native":
-                self._graph = None
-                return
             model = self._llm_provider.get_model() if self._llm_provider else None
             if model is None:
                 self._graph = None

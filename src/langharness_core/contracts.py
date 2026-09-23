@@ -38,6 +38,7 @@ SPEC_VERIFIER = "agent.plugin.verifier"
 SPEC_JOB_MANAGER = "agent.plugin.job_manager"
 SPEC_RUN_CONTROLLER = "agent.plugin.run_controller"
 SPEC_TOOL_PRESENTATION = "agent.plugin.tool_presentation"
+SPEC_PTC_RUNTIME = "agent.plugin.ptc_runtime"
 ModelProtocol = Literal["anthropic", "chat", "responses"]
 ToolPresentationMode = Literal["native", "ptc", "both"]
 
@@ -65,6 +66,7 @@ ALL_PLUGIN_SPECS = (
     SPEC_JOB_MANAGER,
     SPEC_RUN_CONTROLLER,
     SPEC_TOOL_PRESENTATION,
+    SPEC_PTC_RUNTIME,
     SPEC_AGENT_LOOP,
     SPEC_SESSION_INDEX,
     SPEC_AGENT_REGISTRY,
@@ -121,9 +123,7 @@ class MutationRecord:
 GoalStatus = Literal[
     "active", "awaiting_user", "verifying", "complete", "blocked", "cancelled"
 ]
-TERMINAL_GOAL_STATUSES: frozenset[str] = frozenset(
-    {"complete", "blocked", "cancelled"}
-)
+TERMINAL_GOAL_STATUSES: frozenset[str] = frozenset({"complete", "blocked", "cancelled"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -414,6 +414,23 @@ class ToolPresentationProvider(Protocol):
     def get_plugin_info(self) -> dict[str, str]: ...
 
 
+@service_contract(SPEC_PTC_RUNTIME)
+@runtime_checkable
+class PTCRuntimeProvider(Protocol):
+    """Execute one program and dispatch its host-tool calls."""
+
+    async def execute(
+        self,
+        *,
+        code: str,
+        sdk: str,
+        dispatch: Any,
+        timeout_ms: int = 120_000,
+    ) -> dict[str, Any]: ...
+
+    def get_plugin_info(self) -> dict[str, str]: ...
+
+
 @service_contract(SPEC_RESPONSE_FORMAT)
 @runtime_checkable
 class ResponseFormatProvider(Protocol):
@@ -552,9 +569,7 @@ class AgentDirectoryProvider(Protocol):
 
     def binding_properties(self, agent_id: str, plugin: str) -> dict[str, Any]: ...
 
-    def apply_agent_config(
-        self, agent_id: str, plugins: dict[str, Any]
-    ) -> None: ...
+    def apply_agent_config(self, agent_id: str, plugins: dict[str, Any]) -> None: ...
 
     def remove_agent(self, agent_id: str) -> None: ...
 

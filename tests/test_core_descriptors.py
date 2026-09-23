@@ -19,6 +19,7 @@ from langharness_core.plugin import (
     builtin_package,
     dynamic_package,
     dynamic_template_descriptor,
+    ptc_runtime_descriptor,
     session_index_descriptor,
     session_index_properties,
     sqlite_checkpointer_descriptor,
@@ -47,7 +48,9 @@ def test_agent_plugin_descriptor_is_static_only() -> None:
 
 
 def test_agent_binding_properties_carry_agent_id() -> None:
-    properties = agent_binding_properties("a1", "tools", {"plugin.tools.root_dir": "/x"})
+    properties = agent_binding_properties(
+        "a1", "tools", {"plugin.tools.root_dir": "/x"}
+    )
     assert properties["plugin.agent_id"] == "a1"
     assert properties["plugin.tools.root_dir"] == "/x"
 
@@ -96,6 +99,16 @@ def test_agent_directory_descriptor_is_static() -> None:
 
 def test_dynamic_template_descriptor_is_static() -> None:
     validate_descriptor(dynamic_template_descriptor("middleware-plugin"))
+
+
+def test_ptc_runtime_is_registered_at_root_for_agent_scope_visibility() -> None:
+    descriptor = ptc_runtime_descriptor()
+    validate_descriptor(descriptor)
+    contribution = next(
+        item for item in builtin_package().contributions if item.id == "ptc-runtime"
+    )
+    assert contribution.target == "root"
+    assert contribution.descriptor == descriptor
 
 
 def test_helper_catalogs_unchanged() -> None:
