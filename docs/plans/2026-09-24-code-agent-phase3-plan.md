@@ -15,6 +15,14 @@
 
 - [ ] P3-A2 将 sandbox provider 接入 exec foreground/background 和 PTC runtime；记录实际
   isolation，backend 不可用时保持 process-only。
+  - 已完成 PTC runtime 接入：绑定 provider 时包装 Node argv，并返回 provider 的 isolation；
+    未绑定时保持 `process-only`。
+  - 证据：`tests/test_ptc_runtime.py::test_runtime_reports_bound_sandbox_isolation`，
+    `3 passed`（含 sandbox capability tests）；exec foreground/background 接入仍待完成。
+- [x] P3-B1 audit persistence：新增 append-only SQLite audit provider，并由 agent loop 在
+  stream 输出 `ptc_audit` 时写入持久化存储。
+  - 证据：`tests/test_audit_persistence.py` round-trip 保持 sequence；runtime stream audit
+    回归测试通过；Ruff、mypy 通过。
 - [ ] P3-A3 sandbox policy：workspace 读写范围、网络默认拒绝、环境白名单、资源限制和
   symlink 防逃逸；为 macOS `sandbox-exec` 与 Linux `bwrap` 分别测试。
 - [ ] P3-B1 audit persistence：把 `ptc_audit` 和 exec/job/approval 事件写入 append-only

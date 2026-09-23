@@ -28,6 +28,7 @@ from pelix.ipopo.decorators import (
 
 from langharness_core.contracts import (  # noqa: I001 - grouped with the block above
     AgentLoopProvider,
+    AuditProvider,
     AwaitUser,
     CacheProvider,
     CheckpointerProvider,
@@ -159,6 +160,7 @@ def _iter_interrupts(container: Any) -> Iterator[Any]:
     immediate_rebind=True,
 )
 @RequiresBest("_ptc_runtime", PTCRuntimeProvider, optional=True, immediate_rebind=True)
+@RequiresBest("_audit_provider", AuditProvider, optional=True, immediate_rebind=True)
 @Requires("_middleware_providers", MiddlewareProvider, aggregate=True, optional=True)
 @Requires(
     "_system_prompt_providers", SystemPromptProvider, aggregate=True, optional=True
@@ -225,6 +227,7 @@ def _iter_interrupts(container: Any) -> Iterator[Any]:
     "_tool_providers",
     "_presentation_provider",
     "_ptc_runtime",
+    "_audit_provider",
     "_middleware_providers",
     "_system_prompt_providers",
     "_prompt_section_providers",
@@ -249,6 +252,7 @@ class PluginAgentLoop:
         self._tool_providers: list[Any] = []
         self._presentation_provider: Any = None
         self._ptc_runtime: Any = None
+        self._audit_provider: Any = None
         self._middleware_providers: list[Any] = []
         self._system_prompt_providers: list[Any] = []
         self._prompt_section_providers: list[Any] = []
@@ -276,6 +280,7 @@ class PluginAgentLoop:
                 self, "_presentation_provider", ToolPresentationProvider
             ),
             "_ptc_runtime": ContractGuard(self, "_ptc_runtime", PTCRuntimeProvider),
+            "_audit_provider": ContractGuard(self, "_audit_provider", AuditProvider),
             "_middleware_providers": ContractGuard(
                 self, "_middleware_providers", MiddlewareProvider
             ),
@@ -500,6 +505,14 @@ class PluginAgentLoop:
     def _on_ptc_runtime_unbind(self, field: str, service: Any, reference: Any) -> None:
         self._guards[field].release(service)
         self._graph = None
+
+    @BindField("_audit_provider", if_valid=True)
+    def _on_audit_bind(self, field: str, service: Any, reference: Any) -> None:
+        self._guards[field].admit(service)
+
+    @UnbindField("_audit_provider")
+    def _on_audit_unbind(self, field: str, service: Any, reference: Any) -> None:
+        self._guards[field].release(service)
 
     @BindField("_job_manager", if_valid=True)
     def _on_job_manager_bind(self, field: str, service: Any, reference: Any) -> None:
@@ -960,7 +973,10 @@ class PluginAgentLoop:
         async for stream_type, chunk in stream:
             if audit_events:
                 while audit_events:
-                    yield audit_events.pop(0)
+                    audit = audit_events.pop(0)
+                    if self._audit_provider is not None:
+                        await self._audit_provider.append_events([audit])
+                    yield audit
             for job_event in self._drain_job_events():
                 yield job_event
             if stream_type == "messages":
@@ -1019,7 +1035,10 @@ class PluginAgentLoop:
                         }
         if audit_events:
             while audit_events:
-                yield audit_events.pop(0)
+                audit = audit_events.pop(0)
+                if self._audit_provider is not None:
+                    await self._audit_provider.append_events([audit])
+                yield audit
 
     async def astream(
         self, message: str, *, thread_id: str | None = None, resume: Any = None

@@ -117,6 +117,25 @@ async def test_runtime_returns_only_program_output_and_process_isolation() -> No
 
 
 @pytest.mark.asyncio
+async def test_runtime_reports_bound_sandbox_isolation() -> None:
+    class Sandbox:
+        def get_isolation(self) -> str:
+            return "os-sandbox"
+
+        def wrap_command(self, argv: list[str], cwd: str) -> list[str]:
+            assert argv[0] == "node"
+            return [*argv]
+
+    runtime = NodePTCRuntime()
+    runtime._sandbox = Sandbox()
+    result = await runtime.execute(
+        code="return 1;", sdk="", dispatch=lambda _name, _args: None
+    )
+
+    assert result["isolation"] == "os-sandbox"
+
+
+@pytest.mark.asyncio
 async def test_child_can_catch_a_failed_host_call() -> None:
     runtime = NodePTCRuntime()
 

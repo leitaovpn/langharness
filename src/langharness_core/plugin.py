@@ -11,6 +11,7 @@ from langharness_core.contracts import (
     SPEC_AGENT_LOOP,
     SPEC_AGENT_REGISTRY,
     SPEC_AGENT_SERVER,
+    SPEC_AUDIT,
     SPEC_CACHE,
     SPEC_CHECKPOINTER,
     SPEC_CONTEXT_SCHEMA,
@@ -138,6 +139,11 @@ AGENT_PLUGIN_CATALOG: dict[str, tuple[str, str, str]] = {
         "langharness_core.plugins.exec.sandbox",
         "sandbox-plugin-factory",
         SPEC_SANDBOX,
+    ),
+    "audit": (
+        "langharness_core.plugins.sessions.audit",
+        "audit-plugin-factory",
+        SPEC_AUDIT,
     ),
 }
 
@@ -687,6 +693,21 @@ def ptc_runtime_descriptor() -> PluginDescriptor:
     )
 
 
+def sandbox_descriptor() -> PluginDescriptor:
+    """Static definition of the optional OS sandbox capability."""
+    return PluginDescriptor(
+        name="sandbox",
+        version="1.0.0",
+        module="langharness_core.plugins.exec.sandbox",
+        factory="sandbox-plugin-factory",
+        specification=SPEC_SANDBOX,
+        description=(
+            "Detects and wraps supported OS sandbox backends. Reports "
+            "process-only when no backend is available."
+        ),
+    )
+
+
 def builtin_package() -> PluginPackage:
     """Describe server-scoped core plugins and agent plugin templates."""
     return PluginPackage(
@@ -694,6 +715,7 @@ def builtin_package() -> PluginPackage:
         version="1.0.0",
         contributions=(
             PluginContribution("ptc-runtime", "root", ptc_runtime_descriptor()),
+            PluginContribution("sandbox", "root", sandbox_descriptor()),
             PluginContribution(
                 "sqlite-checkpointer", "server", sqlite_checkpointer_descriptor()
             ),

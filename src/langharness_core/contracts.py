@@ -40,6 +40,7 @@ SPEC_RUN_CONTROLLER = "agent.plugin.run_controller"
 SPEC_TOOL_PRESENTATION = "agent.plugin.tool_presentation"
 SPEC_PTC_RUNTIME = "agent.plugin.ptc_runtime"
 SPEC_SANDBOX = "agent.plugin.sandbox"
+SPEC_AUDIT = "agent.plugin.audit"
 ModelProtocol = Literal["anthropic", "chat", "responses"]
 ToolPresentationMode = Literal["native", "ptc", "both"]
 
@@ -69,6 +70,7 @@ ALL_PLUGIN_SPECS = (
     SPEC_TOOL_PRESENTATION,
     SPEC_PTC_RUNTIME,
     SPEC_SANDBOX,
+    SPEC_AUDIT,
     SPEC_AGENT_LOOP,
     SPEC_SESSION_INDEX,
     SPEC_AGENT_REGISTRY,
@@ -441,6 +443,18 @@ class SandboxProvider(Protocol):
     def get_isolation(self) -> Literal["os-sandbox", "process-only"]: ...
 
     def wrap_command(self, argv: list[str], cwd: str) -> list[str]: ...
+
+    def get_plugin_info(self) -> dict[str, str]: ...
+
+
+@service_contract(SPEC_AUDIT)
+@runtime_checkable
+class AuditProvider(Protocol):
+    """Append-only persistence for execution and policy audit events."""
+
+    async def append_events(self, events: list[dict[str, Any]]) -> None: ...
+
+    async def list_events(self, root_call_id: str, limit: int = 100) -> list[dict[str, Any]]: ...
 
     def get_plugin_info(self) -> dict[str, str]: ...
 

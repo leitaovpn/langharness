@@ -13,9 +13,9 @@ from collections.abc import Callable, Mapping
 from importlib.resources import files
 from typing import Any
 
-from pelix.ipopo.decorators import ComponentFactory, Property, Provides
+from pelix.ipopo.decorators import ComponentFactory, Property, Provides, RequiresBest
 
-from langharness_core.contracts import PTCRuntimeProvider
+from langharness_core.contracts import PTCRuntimeProvider, SandboxProvider
 
 DEFAULT_TIMEOUT_MS = 120_000
 MAX_TIMEOUT_MS = 600_000
@@ -32,6 +32,7 @@ def _encode_line(payload: Mapping[str, Any]) -> bytes:
 
 @ComponentFactory("ptc-runtime-plugin-factory")
 @Provides(PTCRuntimeProvider)
+@RequiresBest("_sandbox", SandboxProvider, optional=True, immediate_rebind=True)
 @Property("_plugin_name", "plugin.name", "ptc-runtime")
 @Property("_plugin_version", "plugin.version", "1.0.0")
 class NodePTCRuntime:
@@ -40,6 +41,7 @@ class NodePTCRuntime:
     def __init__(self) -> None:
         self._plugin_name = "ptc-runtime"
         self._plugin_version = "1.0.0"
+        self._sandbox: Any = None
 
     def get_plugin_info(self) -> dict[str, str]:
         return {"name": self._plugin_name, "version": self._plugin_version}
@@ -63,10 +65,13 @@ class NodePTCRuntime:
             )
         )
         started = time.monotonic()
+        command = ["node", "--experimental-strip-types", bootstrap]
+        isolation = "process-only"
+        if self._sandbox is not None:
+            command = self._sandbox.wrap_command(command, os.getcwd())
+            isolation = str(self._sandbox.get_isolation())
         process = await asyncio.create_subprocess_exec(
-            "node",
-            "--experimental-strip-types",
-            bootstrap,
+            *command,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -134,14 +139,14 @@ class NodePTCRuntime:
                             return {
                                 "logs": logs + list(message.get("logs") or []),
                                 "error": error,
-                                "isolation": "process-only",
+                                "isolation": isolation,
                                 "duration_ms": int((time.monotonic() - started) * 1000),
                                 "audit": audit,
                             }
                         return {
                             "logs": logs + list(message.get("logs") or []),
                             "result": message.get("result"),
-                            "isolation": "process-only",
+                            "isolation": isolation,
                             "duration_ms": int((time.monotonic() - started) * 1000),
                             "audit": audit,
                         }
@@ -157,7 +162,7 @@ class NodePTCRuntime:
             return {
                 "logs": logs,
                 "error": {"name": "TimeoutError", "message": "PTC deadline exceeded"},
-                "isolation": "process-only",
+                "isolation": isolation,
                 "duration_ms": int((time.monotonic() - started) * 1000),
                 "audit": audit,
             }

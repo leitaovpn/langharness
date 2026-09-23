@@ -1,0 +1,87 @@
+"""Append-only SQLite storage for agent audit events."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import aiosqlite
+from pelix.ipopo.decorators import ComponentFactory, Invalidate, Property, Provides
+
+from langharness_core.contracts import AuditProvider
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS audit_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    root_call_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    event_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS audit_events_root ON audit_events(root_call_id, sequence, id);
+"""
+
+
+@ComponentFactory("audit-plugin-factory")
+@Provides(AuditProvider)
+@Property("_plugin_name", "plugin.name", "sqlite-audit")
+@Property("_plugin_version", "plugin.version", "1.0.0")
+@Property("_path", "plugin.audit.path", "langharness_audit.sqlite3")
+class SQLiteAuditPlugin:
+    """Stores immutable JSON event snapshots and supports bounded reads."""
+
+    def __init__(self) -> None:
+        self._plugin_name = "sqlite-audit"
+        self._plugin_version = "1.0.0"
+        self._path = "langharness_audit.sqlite3"
+        self._connection: aiosqlite.Connection | None = None
+
+    async def append_events(self, events: list[dict[str, Any]]) -> None:
+        if not events:
+            return
+        connection = await self._ensure_connection()
+        await connection.executemany(
+            "INSERT INTO audit_events(root_call_id, sequence, event_json) VALUES (?, ?, ?)",
+            [
+                (
+                    str(event.get("root_call_id", "")),
+                    int(event.get("sequence", 0)),
+                    json.dumps(event, ensure_ascii=False, sort_keys=True),
+                )
+                for event in events
+            ],
+        )
+        await connection.commit()
+
+    async def list_events(self, root_call_id: str, limit: int = 100) -> list[dict[str, Any]]:
+        connection = await self._ensure_connection()
+        async with connection.execute(
+            "SELECT event_json FROM audit_events WHERE root_call_id = ? "
+            "ORDER BY sequence, id LIMIT ?",
+            (root_call_id, max(0, min(limit, 1000))),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [json.loads(row[0]) for row in rows]
+
+    async def _ensure_connection(self) -> aiosqlite.Connection:
+        if self._connection is None:
+            path = Path(self._path).expanduser()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._connection = await aiosqlite.connect(path)
+            await self._connection.execute("PRAGMA journal_mode=WAL")
+            await self._connection.executescript(_SCHEMA)
+            await self._connection.commit()
+        return self._connection
+
+    @Invalidate
+    def _invalidate(self, bundle_context: Any) -> None:
+        if self._connection is not None:
+            connection = self._connection
+            self._connection = None
+            import asyncio
+
+            asyncio.get_running_loop().create_task(connection.close())
+
+    def get_plugin_info(self) -> dict[str, str]:
+        return {"name": self._plugin_name, "version": self._plugin_version}
