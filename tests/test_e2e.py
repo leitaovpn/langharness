@@ -633,6 +633,7 @@ def test_real_plugin_agent_stream_renders_response_once(tmp_path: Path) -> None:
 def test_real_pelix_ptc_stream_exposes_only_run_code_and_audit(
     protocol: str, tmp_path: Path
 ) -> None:
+    CAPTURED_MESSAGES.clear()
     CAPTURED_PTC_SCHEMAS.clear()
     model = ScriptedPTCModel(
         responses=[
@@ -657,6 +658,7 @@ def test_real_pelix_ptc_stream_exposes_only_run_code_and_audit(
             plugin("llm", "langharness_core.plugins.llm.llm", "llm-plugin-factory", "agent.plugin.llm"),
             plugin("tools", "langharness_core.plugins.tools.tools", "tools-plugin-factory", "agent.plugin.tools"),
             plugin("tool-presentation", "langharness_core.plugins.presentation.mode", "tool-presentation-plugin-factory", "agent.plugin.tool_presentation"),
+            plugin("ptc-prompt", "langharness_core.plugins.prompts.ptc", "ptc-prompt-plugin-factory", "agent.plugin.prompt_section"),
             plugin("ptc-runtime", "langharness_core.plugins.presentation.runtime", "ptc-runtime-plugin-factory", "agent.plugin.ptc_runtime"),
             plugin("agent-loop", "langharness_core.plugins.loop.agent_loop", "agent-loop-factory", SPEC_AGENT_LOOP),
         ]
@@ -680,6 +682,13 @@ def test_real_pelix_ptc_stream_exposes_only_run_code_and_audit(
             return [event async for event in loop.astream("sum")]
 
         events = asyncio.run(collect())
+        first_system = next(
+            message for message in CAPTURED_MESSAGES[-2] if isinstance(message, SystemMessage)
+        )
+        assert "run_code is the only tool" in str(first_system.content)
+        assert "type ToolArgsMap" in str(first_system.content)
+        assert '"add"' in str(first_system.content)
+        assert '"run_code"' not in str(first_system.content)
         ndjson = tmp_path / f"ptc-{protocol}.ndjson"
         ndjson.write_text(
             "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events),
