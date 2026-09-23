@@ -26,6 +26,7 @@ from langharness_core.contracts import (
     SPEC_PTC_RUNTIME,
     SPEC_RESPONSE_FORMAT,
     SPEC_RUN_CONTROLLER,
+    SPEC_SANDBOX,
     SPEC_SESSION_INDEX,
     SPEC_STATE_SCHEMA,
     SPEC_STORE,
@@ -132,6 +133,11 @@ AGENT_PLUGIN_CATALOG: dict[str, tuple[str, str, str]] = {
         "langharness_core.plugins.presentation.mode",
         "tool-presentation-plugin-factory",
         SPEC_TOOL_PRESENTATION,
+    ),
+    "sandbox": (
+        "langharness_core.plugins.exec.sandbox",
+        "sandbox-plugin-factory",
+        SPEC_SANDBOX,
     ),
 }
 

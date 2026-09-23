@@ -39,6 +39,7 @@ SPEC_JOB_MANAGER = "agent.plugin.job_manager"
 SPEC_RUN_CONTROLLER = "agent.plugin.run_controller"
 SPEC_TOOL_PRESENTATION = "agent.plugin.tool_presentation"
 SPEC_PTC_RUNTIME = "agent.plugin.ptc_runtime"
+SPEC_SANDBOX = "agent.plugin.sandbox"
 ModelProtocol = Literal["anthropic", "chat", "responses"]
 ToolPresentationMode = Literal["native", "ptc", "both"]
 
@@ -67,6 +68,7 @@ ALL_PLUGIN_SPECS = (
     SPEC_RUN_CONTROLLER,
     SPEC_TOOL_PRESENTATION,
     SPEC_PTC_RUNTIME,
+    SPEC_SANDBOX,
     SPEC_AGENT_LOOP,
     SPEC_SESSION_INDEX,
     SPEC_AGENT_REGISTRY,
@@ -427,6 +429,18 @@ class PTCRuntimeProvider(Protocol):
         dispatch: Any,
         timeout_ms: int = 120_000,
     ) -> dict[str, Any]: ...
+
+    def get_plugin_info(self) -> dict[str, str]: ...
+
+
+@service_contract(SPEC_SANDBOX)
+@runtime_checkable
+class SandboxProvider(Protocol):
+    """Describe and apply an optional OS-level process sandbox."""
+
+    def get_isolation(self) -> Literal["os-sandbox", "process-only"]: ...
+
+    def wrap_command(self, argv: list[str], cwd: str) -> list[str]: ...
 
     def get_plugin_info(self) -> dict[str, str]: ...
 

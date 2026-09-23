@@ -58,6 +58,7 @@ PUBLIC_MODULES = [
     "langharness_core.plugins.presentation.mode",
     "langharness_core.plugins.presentation.sdk",
     "langharness_core.plugins.presentation.runtime",
+    "langharness_core.plugins.exec.sandbox",
     "langharness_core.plugins.instructions.resolver",
     "langharness_core.plugins.instructions.repository",
     "langharness_core.common.tool_error",
