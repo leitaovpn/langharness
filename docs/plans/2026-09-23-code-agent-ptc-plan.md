@@ -2,6 +2,52 @@
 
 状态：进行中。Phase 1 已由 `9449e0c` 完成确定性验收；真实模型 smoke 默认跳过。
 
+## 细化 TODO 与验收记录
+
+### A. 已验收
+
+- [x] A1 模式契约与 scoped provider：`native | ptc | both`，默认 native。
+  - 证据：`tests/test_presentation_mode.py`、`tests/test_core_descriptors.py`。
+- [x] A2 Typed SDK：稳定排序、输入/输出 schema、排除 `run_code`。
+  - 证据：`tests/test_ptc_sdk.py`、`tests/test_ptc_output_schemas.py`。
+- [x] A3 Node runtime：JSON 行协议、TypeScript 擦除、deadline、取消、进程组清理、输出上限。
+  - 证据：`tests/test_ptc_runtime.py` 的超时、取消、输出上限和可捕获错误测试。
+- [x] A4 loop 接线：ptc 仅暴露 `run_code`，both 暴露原生工具和 `run_code`。
+  - 证据：`tests/test_ptc_runtime.py::test_loop_ptc_mode_exposes_run_code_and_dispatches_scoped_tools`。
+- [x] A5 子调用审计：root/parent/sub call id、参数、状态、结果、耗时；模型结果剥离 audit。
+  - 证据：`tests/test_ptc_runtime.py::test_runtime_returns_only_program_output_and_process_isolation`。
+- [x] A6 调度策略：只读调用最多 4 个并发，写调用串行。
+  - 证据：`tests/test_ptc_runtime.py::test_loop_serializes_writes_but_allows_read_only_calls`。
+- [x] A7 PTC prompt/preset：order 800 PTC-only section，新增 `ptc` preset，native 不注入。
+  - 证据：`src/langharness_core/plugins/prompts/ptc.py`，目录导入测试通过。
+
+本轮命令证据：
+
+```text
+.venv/bin/pytest -q tests/test_ptc_runtime.py
+10 passed
+```
+
+最近一次完整质量门证据（提交 `63cfc83` 前）：
+
+```text
+make check
+1336 passed, 2 skipped
+Required test coverage of 95% reached. Total coverage: 95.58%
+```
+
+### B. 待完成的小节
+
+- [ ] B1 审计事件模型：定义统一事件类型和顺序字段，接入 agent stream 或持久化审计服务。
+- [ ] B2 pending 生命周期：Node 退出、超时、取消时等待/取消所有 host dispatch，并测试无悬挂任务。
+- [ ] B3 授权拒绝：PTC 模式下原生工具直调返回结构化错误；both 模式允许两条路径。
+- [ ] B4 runtime 缺失：ptc/both 明确拒绝装配，不能静默降级 native。
+- [ ] B5 prompt 完整性：加入 order 5000 SDK section，并证明 prompt 中的 SDK 与 wire schema 相同。
+- [ ] B6 scope 隔离：两个 agent scope 的工具、模式、SDK 和 runtime dispatch 互不串用。
+- [ ] B7 Pelix + fake model E2E：验证模型收到的 schema、程序并发读取、写入串行、审计和取消。
+- [ ] B8 三协议验收：chat、anthropic、responses 各跑一轮，保存 NDJSON 结果和 artifact。
+- [ ] B9 完整质量门：所有 B 项完成后重新运行 `make check`，覆盖率保持至少 95%。
+
 ## 目标与边界
 
 让同一组 agent scope 内的工具按 `native | ptc | both` 呈现。PTC 模式下，模型只看见
