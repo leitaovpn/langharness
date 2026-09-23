@@ -50,6 +50,22 @@ def test_a_command_runs_in_the_workspace(tmp_path: Path) -> None:
     assert Path(result["output"].strip()).resolve() == tmp_path.resolve()
 
 
+def test_exec_command_uses_bound_sandbox_and_reports_isolation(tmp_path: Path) -> None:
+    instance = build(tmp_path)
+
+    class Sandbox:
+        def get_isolation(self) -> str:
+            return "os-sandbox"
+
+        def wrap_command(self, argv: list[str], cwd: str) -> list[str]:
+            return [*argv]
+
+    instance._sandbox = Sandbox()
+    result = run(instance, command=[sys.executable, "-c", "print('ok')"])
+
+    assert result["isolation"] == "os-sandbox"
+
+
 def test_a_relative_cwd_is_resolved_against_the_workspace(tmp_path: Path) -> None:
     (tmp_path / "sub").mkdir()
     result = run(

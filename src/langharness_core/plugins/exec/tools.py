@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from langharness_core.common.tool_error import tool_error
 from langharness_core.contracts import (
     JobManagerProvider,
+    SandboxProvider,
     ToolProvider,
     WorkspaceProvider,
     WorkspaceStateProvider,
@@ -101,7 +102,8 @@ class ExecCommandArgs(BaseModel):
 @RequiresBest("_jobs", JobManagerProvider, optional=True, immediate_rebind=True)
 @RequiresBest("_workspace", WorkspaceProvider, optional=True, immediate_rebind=True)
 @RequiresBest("_state", WorkspaceStateProvider, optional=True, immediate_rebind=True)
-@ScopedDependencies("_jobs", "_workspace", "_state")
+@RequiresBest("_sandbox", SandboxProvider, optional=True, immediate_rebind=True)
+@ScopedDependencies("_jobs", "_workspace", "_state", "_sandbox")
 class ExecToolsPlugin:
     """Runs commands inside the workspace, in the foreground or as a job."""
 
@@ -114,12 +116,14 @@ class ExecToolsPlugin:
         self._jobs: Any = None
         self._workspace: Any = None
         self._state: Any = None
+        self._sandbox: Any = None
         self._agent_id = ""
         self._offsets: dict[str, int] = {}
         self._guards: dict[str, ContractGuard] = {
             "_jobs": ContractGuard(self, "_jobs", JobManagerProvider),
             "_workspace": ContractGuard(self, "_workspace", WorkspaceProvider),
             "_state": ContractGuard(self, "_state", WorkspaceStateProvider),
+            "_sandbox": ContractGuard(self, "_sandbox", SandboxProvider),
         }
 
     @BindField("_jobs", if_valid=True)
@@ -144,6 +148,14 @@ class ExecToolsPlugin:
 
     @UnbindField("_state")
     def _on_state_unbind(self, field: str, service: Any, reference: Any) -> None:
+        self._guards[field].release(service)
+
+    @BindField("_sandbox", if_valid=True)
+    def _on_sandbox_bind(self, field: str, service: Any, reference: Any) -> None:
+        self._guards[field].admit(service)
+
+    @UnbindField("_sandbox")
+    def _on_sandbox_unbind(self, field: str, service: Any, reference: Any) -> None:
         self._guards[field].release(service)
 
     def get_plugin_info(self) -> dict[str, str]:
@@ -193,6 +205,10 @@ class ExecToolsPlugin:
             except WorkspacePathError as exc:
                 return to_tool_error(exc)
             argv = [str(part) for part in command]
+            isolation = "process-only"
+            if plugin._sandbox is not None:
+                argv = plugin._sandbox.wrap_command(argv, str(target.absolute))
+                isolation = str(plugin._sandbox.get_isolation())
             if background:
                 try:
                     record = plugin._jobs.start_job(
@@ -207,6 +223,7 @@ class ExecToolsPlugin:
                     "state": record.state,
                     "command": list(record.command),
                     "cwd": target.relative,
+                    "isolation": isolation,
                 }
             limit = min(int(timeout_seconds), int(plugin._max_timeout_seconds))
             outcome = run_command(
@@ -232,6 +249,7 @@ class ExecToolsPlugin:
                 "output": outcome.output,
                 "truncated": outcome.truncated,
                 "duration_ms": outcome.duration_ms,
+                "isolation": isolation,
             }
 
         return StructuredTool.from_function(

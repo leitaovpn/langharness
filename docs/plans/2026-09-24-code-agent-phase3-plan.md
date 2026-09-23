@@ -17,8 +17,10 @@
   isolation，backend 不可用时保持 process-only。
   - 已完成 PTC runtime 接入：绑定 provider 时包装 Node argv，并返回 provider 的 isolation；
     未绑定时保持 `process-only`。
-  - 证据：`tests/test_ptc_runtime.py::test_runtime_reports_bound_sandbox_isolation`，
-    `3 passed`（含 sandbox capability tests）；exec foreground/background 接入仍待完成。
+  - 已完成 foreground exec 接入；background job 使用同一包装后的 argv。
+  - 证据：`tests/test_ptc_runtime.py::test_runtime_reports_bound_sandbox_isolation`、
+    `tests/test_exec_tools.py::test_exec_command_uses_bound_sandbox_and_reports_isolation`；
+    exec 定向测试 `24 passed`；backend policy/resource limits 仍待完成。
 - [x] P3-B1 audit persistence：新增 append-only SQLite audit provider，并由 agent loop 在
   stream 输出 `ptc_audit` 时写入持久化存储。
   - 证据：`tests/test_audit_persistence.py` round-trip 保持 sequence；runtime stream audit
