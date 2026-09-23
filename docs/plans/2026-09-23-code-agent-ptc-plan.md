@@ -63,14 +63,17 @@ Required test coverage of 95% reached. Total coverage: 95.58%
   - 证据：`tests/test_ptc_runtime.py::test_ptc_scope_switch_changes_sdk_and_dispatch_target`；
     alpha scope 仅得到 `alpha_tool` 并返回 11，beta scope 仅得到 `beta_tool` 并返回 21；
     Ruff 通过，定向 pytest 通过。待验证：两个真实 agent scope 的模式注入和 prompt 隔离。
-- [ ] B7 Pelix + fake model E2E：验证模型收到的 schema、程序并发读取、写入串行、审计和取消。
+- [x] B7 Pelix + fake model E2E：验证模型收到的 schema、程序并发读取、写入串行、审计和取消。
   - 已验证：真实 Pelix/iPOPO 装配、模型只绑定 `run_code`、Node 子调用、审计事件、
     模型结果隔离。测试：`tests/test_e2e.py::test_real_pelix_ptc_stream_exposes_only_run_code_and_audit`。
-  - 待验证：框架级并发读取、独占写入、恶意直调拒绝、取消排空。
-- [ ] B8 三协议验收：chat、anthropic、responses 各跑一轮，保存 NDJSON 结果和 artifact。
+  - 已验证：调度器交错读写屏障、PTC 原生直调拒绝、runtime 取消排空；定向 PTC 测试 `23 passed`。
+- [x] B8 三协议验收：chat、anthropic、responses 各跑一轮，保存 NDJSON 结果和 artifact。
   - 已验证：上述 fake model Pelix 流程按三个协议配置各跑一轮，测试写入并回读
-    `ptc-<protocol>.ndjson`，`3 passed`。待验证：真实协议适配器的调用格式和产物。
-- [ ] B9 完整质量门：所有 B 项完成后重新运行 `make check`，覆盖率保持至少 95%。
+    `ptc-<protocol>.ndjson`，`3 passed`；当前证据使用 fake model 的三协议配置，真实外部
+    provider smoke 仍按仓库约定跳过。
+- [x] B9 完整质量门：所有 B 项完成后重新运行 `make check`，覆盖率保持至少 95%。
+  - 证据：`make check`；Ruff、mypy、Pyright、clean-process imports 全部通过；
+    `1351 passed, 2 skipped`，覆盖率 `95.46%`。
 
 ## 目标与边界
 

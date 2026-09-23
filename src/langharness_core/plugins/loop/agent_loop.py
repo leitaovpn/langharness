@@ -55,6 +55,7 @@ from langharness_core.contracts import (  # noqa: I001 - grouped with the block 
     TransformersProvider,
     WorkspaceProvider,
 )
+from langharness_core.plugins.presentation.scheduler import PTCDispatchGate
 from langharness_core.plugins.presentation.sdk import render_tool_sdk
 from langharness_core.plugins.prompts.context import (
     build_prompt_context,
@@ -696,8 +697,7 @@ class PluginAgentLoop:
             for tool in self._collect_native_tools()
             if getattr(tool, "name", None) != "run_code"
         }
-        read_slots = asyncio.Semaphore(4)
-        write_lock = asyncio.Lock()
+        dispatch_gate = PTCDispatchGate(max_readers=4)
 
         def is_read_only(tool: Any) -> bool:
             metadata = getattr(tool, "metadata", None)
@@ -711,10 +711,7 @@ class PluginAgentLoop:
                 raise ValueError(f"Tool {name!r} is not available in this scope")
             if not isinstance(args, Mapping):
                 raise TypeError("Tool arguments must be an object")
-            if is_read_only(tool):
-                async with read_slots:
-                    return await tool.ainvoke(dict(args))
-            async with write_lock:
+            async with dispatch_gate.acquire(read_only=is_read_only(tool)):
                 return await tool.ainvoke(dict(args))
 
         result = cast(

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -315,7 +315,7 @@ def test_ptc_prompt_contains_scoped_sdk_after_policy() -> None:
     loop._presentation_provider = _Mode("ptc")
     loop._ptc_runtime = NodePTCRuntime()
     prompt = PTCPromptPlugin()
-    prompt._presentation = loop._presentation_provider
+    prompt._presentation = cast(Any, loop._presentation_provider)
     loop._prompt_section_providers = [prompt]
 
     assembled = loop._prompt_for_request({"messages": []})
@@ -423,3 +423,50 @@ async def test_loop_serializes_writes_but_allows_read_only_calls() -> None:
     )
     assert result["result"] == [1, 2]
     assert asyncio.get_running_loop().time() - write_start >= 0.19
+
+
+@pytest.mark.asyncio
+async def test_ptc_writer_does_not_overlap_an_earlier_reader() -> None:
+    active = 0
+    overlap = False
+
+    async def read(value: int) -> int:
+        nonlocal active
+        active += 1
+        await asyncio.sleep(0.08)
+        active -= 1
+        return value
+
+    async def write(value: int) -> int:
+        nonlocal overlap
+        overlap = active > 0
+        return value
+
+    reader = StructuredTool.from_function(
+        coroutine=read,
+        name="read",
+        description="Read",
+        metadata={"read_only": True},
+    )
+    writer = StructuredTool.from_function(
+        coroutine=write,
+        name="write",
+        description="Write",
+        metadata={"read_only": False},
+    )
+
+    class Provider:
+        def get_tools(self) -> list[Any]:
+            return [reader, writer]
+
+    loop = PluginAgentLoop()
+    loop._tool_providers = [Provider()]
+    loop._presentation_provider = _Mode("ptc")
+    loop._ptc_runtime = NodePTCRuntime()
+    result = await loop._run_code(
+        "return await Promise.all([tools.read({value: 1}), "
+        "tools.write({value: 2})]);"
+    )
+
+    assert result["result"] == [1, 2]
+    assert not overlap

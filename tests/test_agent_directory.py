@@ -50,16 +50,16 @@ def test_ptc_preset_sets_presentation_mode_and_honours_explicit_override() -> No
         "preset": {"properties": {"preset.name": "ptc"}}
     }
 
-    assert directory._binding_properties(agent, "tool-presentation")[
-        "plugin.tools.presentation"
-    ] == "ptc"
+    initial = directory._binding_properties(agent, "tool-presentation")
+    assert initial is not None
+    assert initial["plugin.tools.presentation"] == "ptc"
 
     directory._configs["ptc_agent"]["tool-presentation"] = {
         "properties": {"plugin.tools.presentation": "both"}
     }
-    assert directory._binding_properties(agent, "tool-presentation")[
-        "plugin.tools.presentation"
-    ] == "both"
+    overridden = directory._binding_properties(agent, "tool-presentation")
+    assert overridden is not None
+    assert overridden["plugin.tools.presentation"] == "both"
 
 
 REQUIRED_MODULES = {

@@ -697,6 +697,56 @@ def test_real_pelix_ptc_stream_exposes_only_run_code_and_audit(
         manager.stop()
 
 
+def test_real_pelix_both_mode_exposes_native_and_run_code() -> None:
+    CAPTURED_PTC_SCHEMAS.clear()
+    model = ScriptedPTCModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "add",
+                        "args": {"a": 2, "b": 3},
+                        "id": "native-call",
+                    }
+                ],
+            ),
+            AIMessage(content="native result received"),
+        ]
+    )
+    manager = PluginManager(PluginRegistry())
+    manager.start()
+    try:
+        descriptors = [
+            plugin("llm", "langharness_core.plugins.llm.llm", "llm-plugin-factory", "agent.plugin.llm"),
+            plugin("tools", "langharness_core.plugins.tools.tools", "tools-plugin-factory", "agent.plugin.tools"),
+            plugin("tool-presentation", "langharness_core.plugins.presentation.mode", "tool-presentation-plugin-factory", "agent.plugin.tool_presentation"),
+            plugin("ptc-runtime", "langharness_core.plugins.presentation.runtime", "ptc-runtime-plugin-factory", "agent.plugin.ptc_runtime"),
+            plugin("agent-loop", "langharness_core.plugins.loop.agent_loop", "agent-loop-factory", SPEC_AGENT_LOOP),
+        ]
+        for descriptor in descriptors:
+            manager.install_descriptor(descriptor)
+        properties = {
+            "llm": {"plugin.model.instance": model},
+            "tool-presentation": {"plugin.tools.presentation": "both"},
+        }
+        for descriptor in descriptors:
+            manager.create_instance(
+                descriptor.factory,
+                descriptor.module,
+                ROOT_SCOPE_ID,
+                properties=properties.get(descriptor.name, {}),
+            )
+        loop = manager.get_service(SPEC_AGENT_LOOP)
+
+        result = loop.invoke("call native tool")
+
+        assert CAPTURED_PTC_SCHEMAS == [["add", "run_code"], ["add", "run_code"]]
+        assert result["messages"][-1].content == "native result received"
+    finally:
+        manager.stop()
+
+
 @pytest.mark.parametrize("protocol", ["chat", "anthropic", "responses"])
 def test_agent_loop_invocation_is_unchanged_for_all_protocols(
     tmp_path: Path, protocol: str
