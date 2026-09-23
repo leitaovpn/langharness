@@ -1,0 +1,54 @@
+# Code Agent Phase 2：PTC 实施计划
+
+状态：进行中。Phase 1 已由 `9449e0c` 完成确定性验收；真实模型 smoke 默认跳过。
+
+## 目标与边界
+
+让同一组 agent scope 内的工具按 `native | ptc | both` 呈现。PTC 模式下，模型只看见
+`run_code`，程序通过生成的 SDK 调用现有工具。LangGraph `ToolNode` 继续承担工具调用的
+执行节点；它本身不提供程序运行时、host bindings、审计或模式授权，因此这些能力必须由
+Phase 2 明确实现。
+
+完成条件：设计文档第 7 节及第 11 节 Phase 2 的全部断言通过，并保持 `make check`
+及至少 95% 覆盖率。每项改动先写失败测试，生产插件通过 Protocol 服务通信，不跨插件
+导入具体实现。
+
+## 接口与装配
+
+- `ToolPresentationProvider.get_mode() -> Literal["native", "ptc", "both"]` 是按 agent
+  scope 注入的模式服务。缺省为 `native`；未知值拒绝。它只声明模式，不复制工具注册表。
+- agent loop 从现有 scoped `ToolProvider` 收集原生工具；模式判据同时用于模型请求的工具
+  列表和 dispatch authorization。PTC 直调原生工具返回结构化错误，不能进入原工具。
+- PTC runtime 也是服务契约。缺失时 `ptc` / `both` 装配失败并明确报错，不降级为 native。
+- `run_code` 是外层工具，输入为 `code`、`description`、可选正数 `timeout_ms`；SDK 的工具
+  集合按当前 scope 生成，排除 `run_code`。首版运行语言为可擦除 TypeScript，使用独立 Node
+  进程；运行结果标明 `isolation="process-only"`。
+- 子调用带父子 call id，重走现有工具策略与审计。只读调用可有限并发，写调用独占；程序
+  退出、超时或取消时停止并排空未完成子调用。程序输出只包含显式日志和返回值，中间结果
+  留在审计记录。
+
+## 开发顺序
+
+1. **模式契约与可选插件（已完成）**：增加 `SPEC_TOOL_PRESENTATION`、Protocol、Pelix provider、
+   catalog 与 template。测试无配置时为 native、合法模式可设置、无效模式被拒绝、不同
+   agent scope 可选不同模式。此步骤不启用 PTC wire schema。
+2. **稳定 typed SDK**：基于 LangChain 工具的输入 JSON schema 和明确的输出 schema 生成
+   排序稳定的 TypeScript 声明。`run_code` 永不进入 SDK；未声明输出形状时用
+   `unknown`，不能猜测字段。测试同一工具集文本稳定、scope 切换、复杂 schema 和名称冲突。
+3. **进程运行时与 host binding**：新服务负责单次 Node 子进程、JSON 行协议、deadline、
+   进程组清理、输出/内存/pending 上限；绑定请求在 host 校验参数并调用原工具。测试
+   超时、取消、进程残留、输出截断、可捕获子调用错误和结束排空。
+4. **调度与审计**：只读并发、写调用独占且按提交顺序；每个子调用记录开始和结算事件，
+   带 root/parent/sub call id、参数、结果和耗时。测试并发屏障、审批/策略失败、不向模型
+   泄漏中间结果。
+5. **呈现与执行授权**：loop 加入 scoped presenter。模型请求按模式提供工具 schema；
+   dispatch 使用同一 mode 判据阻断 PTC 原生直调。`both` 同时允许原生与程序调用；
+   runtime 缺失时拒绝 PTC 模式。测试三模式 schema 与恶意直调，覆盖同步和异步路径。
+6. **prompt 与 preset**：增加 order 800 的 PTC-only 指令和 order 5000 的 SDK section，
+   把 provider/runtime 装入 PTC preset；保持现有 `code` preset 为 native。测试 prompt 排序、
+   SDK 与 wire schema 一致、不同 agent 互不串 scope。
+7. **端到端验收**：真实 Pelix + fake model 断言 PTC schema 严格为 `[run_code]`、程序内
+   并发读取、独占写入、直调被拒绝、审计完整、取消排空；三协议各跑一轮。
+
+Task 1 完成后仍只具备模式配置服务。Task 2–7 完成前不得把 `ptc` 加入默认 preset，也
+不得在用户界面上宣称 PTC 已可用。

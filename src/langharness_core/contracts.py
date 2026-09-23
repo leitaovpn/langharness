@@ -37,7 +37,9 @@ SPEC_GOAL = "agent.plugin.goal"
 SPEC_VERIFIER = "agent.plugin.verifier"
 SPEC_JOB_MANAGER = "agent.plugin.job_manager"
 SPEC_RUN_CONTROLLER = "agent.plugin.run_controller"
+SPEC_TOOL_PRESENTATION = "agent.plugin.tool_presentation"
 ModelProtocol = Literal["anthropic", "chat", "responses"]
+ToolPresentationMode = Literal["native", "ptc", "both"]
 
 ALL_PLUGIN_SPECS = (
     SPEC_LLM,
@@ -62,6 +64,7 @@ ALL_PLUGIN_SPECS = (
     SPEC_VERIFIER,
     SPEC_JOB_MANAGER,
     SPEC_RUN_CONTROLLER,
+    SPEC_TOOL_PRESENTATION,
     SPEC_AGENT_LOOP,
     SPEC_SESSION_INDEX,
     SPEC_AGENT_REGISTRY,
@@ -397,6 +400,16 @@ class RunControllerProvider(Protocol):
     def decide(
         self, *, rounds_run: int, checkpointer_available: bool
     ) -> RunDecision: ...
+
+    def get_plugin_info(self) -> dict[str, str]: ...
+
+
+@service_contract(SPEC_TOOL_PRESENTATION)
+@runtime_checkable
+class ToolPresentationProvider(Protocol):
+    """Select how tools are presented to a model in one agent scope."""
+
+    def get_mode(self) -> ToolPresentationMode: ...
 
     def get_plugin_info(self) -> dict[str, str]: ...
 

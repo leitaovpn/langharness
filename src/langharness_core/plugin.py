@@ -30,6 +30,7 @@ from langharness_core.contracts import (
     SPEC_STORE,
     SPEC_SYSTEM_PROMPT,
     SPEC_TOOL,
+    SPEC_TOOL_PRESENTATION,
     SPEC_TRANSFORMERS,
     SPEC_VERIFIER,
     SPEC_WORKSPACE,
@@ -120,6 +121,11 @@ AGENT_PLUGIN_CATALOG: dict[str, tuple[str, str, str]] = {
         "langharness_core.plugins.goals.ask_user",
         "ask-user-plugin-factory",
         SPEC_TOOL,
+    ),
+    "tool-presentation": (
+        "langharness_core.plugins.presentation.mode",
+        "tool-presentation-plugin-factory",
+        SPEC_TOOL_PRESENTATION,
     ),
 }
 
@@ -246,6 +252,7 @@ AGENT_LOOP_FIELDS: dict[str, str] = {
     SPEC_INTERRUPT_BEFORE: "_interrupt_before_providers",
     SPEC_INTERRUPT_AFTER: "_interrupt_after_providers",
     SPEC_RUN_CONTROLLER: "_run_controller",
+    SPEC_TOOL_PRESENTATION: "_presentation_provider",
 }
 
 AGENT_PLUGIN_DESCRIPTIONS: dict[str, str] = {
@@ -354,6 +361,13 @@ AGENT_PLUGIN_DESCRIPTIONS: dict[str, str] = {
         "user input. Implements agent.plugin.tools. Properties: "
         "plugin.agent_id. Requires a restart for property changes. Uninstall "
         "when the agent is removed."
+    ),
+    "tool-presentation": (
+        "Selects the agent-scoped tool presentation mode. Implements "
+        "agent.plugin.tool_presentation. Properties: "
+        "plugin.tools.presentation (native, ptc, or both), plugin.agent_id. "
+        "Requires a restart for property changes. Uninstall when the agent "
+        "is removed."
     ),
     "agent-loop": (
         "Runs the agent loop for one agent scope. Implements "
@@ -711,6 +725,11 @@ def builtin_package() -> PluginPackage:
                 "run-controller-template",
                 "agent",
                 agent_plugin_template_descriptor("run-controller"),
+            ),
+            PluginContribution(
+                "tool-presentation-template",
+                "agent",
+                agent_plugin_template_descriptor("tool-presentation"),
             ),
             PluginContribution(
                 "agent-loop-template", "agent", agent_loop_template_descriptor()

@@ -319,6 +319,7 @@ def test_validate_materializes_default_plugins_and_loop() -> None:
         "_prompt_section_providers": visibility,
         "_workspace_provider": visibility,
         "_run_controller": visibility,
+        "_presentation_provider": visibility,
     }
 
 

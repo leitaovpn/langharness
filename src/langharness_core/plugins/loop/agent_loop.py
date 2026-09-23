@@ -47,6 +47,7 @@ from langharness_core.contracts import (  # noqa: I001 - grouped with the block 
     Stop,
     StoreProvider,
     SystemPromptProvider,
+    ToolPresentationProvider,
     ToolProvider,
     TransformersProvider,
     WorkspaceProvider,
@@ -143,8 +144,16 @@ def _iter_interrupts(container: Any) -> Iterator[Any]:
 @RequiresBest("_llm_provider", LLMProvider, optional=False, immediate_rebind=True)
 @Requires("_scoped_llm_providers", LLMProvider, aggregate=True, optional=True)
 @Requires("_tool_providers", ToolProvider, aggregate=True, optional=True)
+@RequiresBest(
+    "_presentation_provider",
+    ToolPresentationProvider,
+    optional=True,
+    immediate_rebind=True,
+)
 @Requires("_middleware_providers", MiddlewareProvider, aggregate=True, optional=True)
-@Requires("_system_prompt_providers", SystemPromptProvider, aggregate=True, optional=True)
+@Requires(
+    "_system_prompt_providers", SystemPromptProvider, aggregate=True, optional=True
+)
 @Requires(
     "_prompt_section_providers", PromptSectionProvider, aggregate=True, optional=True
 )
@@ -205,6 +214,7 @@ def _iter_interrupts(container: Any) -> Iterator[Any]:
     "_llm_provider",
     "_scoped_llm_providers",
     "_tool_providers",
+    "_presentation_provider",
     "_middleware_providers",
     "_system_prompt_providers",
     "_prompt_section_providers",
@@ -227,6 +237,7 @@ class PluginAgentLoop:
         self._llm_provider: Any = None
         self._scoped_llm_providers: list[Any] = []
         self._tool_providers: list[Any] = []
+        self._presentation_provider: Any = None
         self._middleware_providers: list[Any] = []
         self._system_prompt_providers: list[Any] = []
         self._prompt_section_providers: list[Any] = []
@@ -250,6 +261,9 @@ class PluginAgentLoop:
                 self, "_scoped_llm_providers", LLMProvider
             ),
             "_tool_providers": ContractGuard(self, "_tool_providers", ToolProvider),
+            "_presentation_provider": ContractGuard(
+                self, "_presentation_provider", ToolPresentationProvider
+            ),
             "_middleware_providers": ContractGuard(
                 self, "_middleware_providers", MiddlewareProvider
             ),
@@ -262,9 +276,7 @@ class PluginAgentLoop:
             "_workspace_provider": ContractGuard(
                 self, "_workspace_provider", WorkspaceProvider
             ),
-            "_job_manager": ContractGuard(
-                self, "_job_manager", JobManagerProvider
-            ),
+            "_job_manager": ContractGuard(self, "_job_manager", JobManagerProvider),
             "_run_controller": ContractGuard(
                 self, "_run_controller", RunControllerProvider
             ),
@@ -377,9 +389,7 @@ class PluginAgentLoop:
         self._rebuild()
 
     @UnbindField("_scoped_llm_providers", if_valid=True)
-    def _on_scoped_llm_unbind(
-        self, field: str, service: Any, reference: Any
-    ) -> None:
+    def _on_scoped_llm_unbind(self, field: str, service: Any, reference: Any) -> None:
         with self._excluding_service(service):
             self._guards[field].release(service)
             self._forget_service(service)
@@ -422,16 +432,16 @@ class PluginAgentLoop:
         self._rebuild()
 
     @UnbindField("_system_prompt_providers", if_valid=True)
-    def _on_system_prompt_unbind(self, field: str, service: Any, reference: Any) -> None:
+    def _on_system_prompt_unbind(
+        self, field: str, service: Any, reference: Any
+    ) -> None:
         with self._excluding_service(service):
             self._guards[field].release(service)
             self._forget_service(service)
             self._rebuild()
 
     @BindField("_prompt_section_providers", if_valid=True)
-    def _on_prompt_section_bind(
-        self, field: str, service: Any, reference: Any
-    ) -> None:
+    def _on_prompt_section_bind(self, field: str, service: Any, reference: Any) -> None:
         if not self._guards[field].admit(service):
             return
         self._remember_service(service, reference)
@@ -454,6 +464,17 @@ class PluginAgentLoop:
 
     @UnbindField("_workspace_provider")
     def _on_workspace_unbind(self, field: str, service: Any, reference: Any) -> None:
+        self._guards[field].release(service)
+        self._graph = None
+
+    @BindField("_presentation_provider", if_valid=True)
+    def _on_presentation_bind(self, field: str, service: Any, reference: Any) -> None:
+        if not self._guards[field].admit(service):
+            return
+        self._rebuild()
+
+    @UnbindField("_presentation_provider")
+    def _on_presentation_unbind(self, field: str, service: Any, reference: Any) -> None:
         self._guards[field].release(service)
         self._graph = None
 
@@ -482,13 +503,17 @@ class PluginAgentLoop:
         self._graph = None
 
     @BindField("_response_format_provider", if_valid=True)
-    def _on_response_format_bind(self, field: str, service: Any, reference: Any) -> None:
+    def _on_response_format_bind(
+        self, field: str, service: Any, reference: Any
+    ) -> None:
         if not self._guards[field].admit(service):
             return
         self._rebuild()
 
     @UnbindField("_response_format_provider")
-    def _on_response_format_unbind(self, field: str, service: Any, reference: Any) -> None:
+    def _on_response_format_unbind(
+        self, field: str, service: Any, reference: Any
+    ) -> None:
         self._guards[field].release(service)
         self._graph = None
 
@@ -510,7 +535,9 @@ class PluginAgentLoop:
         self._rebuild()
 
     @UnbindField("_context_schema_provider")
-    def _on_context_schema_unbind(self, field: str, service: Any, reference: Any) -> None:
+    def _on_context_schema_unbind(
+        self, field: str, service: Any, reference: Any
+    ) -> None:
         self._guards[field].release(service)
         self._graph = None
 
@@ -537,7 +564,9 @@ class PluginAgentLoop:
         self._graph = None
 
     @BindField("_interrupt_before_providers", if_valid=True)
-    def _on_interrupt_before_bind(self, field: str, service: Any, reference: Any) -> None:
+    def _on_interrupt_before_bind(
+        self, field: str, service: Any, reference: Any
+    ) -> None:
         if not self._guards[field].admit(service):
             return
         self._remember_service(service, reference)
@@ -553,7 +582,9 @@ class PluginAgentLoop:
             self._rebuild()
 
     @BindField("_interrupt_after_providers", if_valid=True)
-    def _on_interrupt_after_bind(self, field: str, service: Any, reference: Any) -> None:
+    def _on_interrupt_after_bind(
+        self, field: str, service: Any, reference: Any
+    ) -> None:
         if not self._guards[field].admit(service):
             return
         self._remember_service(service, reference)
@@ -609,9 +640,7 @@ class PluginAgentLoop:
         self._rebuild()
 
     @UnbindField("_transformers_providers", if_valid=True)
-    def _on_transformers_unbind(
-        self, field: str, service: Any, reference: Any
-    ) -> None:
+    def _on_transformers_unbind(self, field: str, service: Any, reference: Any) -> None:
         with self._excluding_service(service):
             self._guards[field].release(service)
             self._forget_service(service)
@@ -622,6 +651,15 @@ class PluginAgentLoop:
         for provider in self._effective(self._tool_providers):
             tools.extend(provider.get_tools())
         return tools
+
+    def _presentation_mode(self) -> str:
+        if self._presentation_provider is None:
+            return "native"
+        return str(self._presentation_provider.get_mode())
+
+    def _require_available_presentation(self) -> None:
+        if self._presentation_mode() != "native":
+            raise RuntimeError("PTC runtime is not available for this agent")
 
     def _collect_middlewares(self) -> list[Any]:
         middlewares: list[Any] = []
@@ -740,6 +778,9 @@ class PluginAgentLoop:
         # unavailable" until restart). Clear the graph instead; the next
         # successful rebind rebuilds it.
         try:
+            if self._presentation_mode() != "native":
+                self._graph = None
+                return
             model = self._llm_provider.get_model() if self._llm_provider else None
             if model is None:
                 self._graph = None
@@ -784,12 +825,18 @@ class PluginAgentLoop:
                     if self._checkpointer_provider
                     else None
                 ),
-                store=self._store_provider.get_store() if self._store_provider else None,
+                store=self._store_provider.get_store()
+                if self._store_provider
+                else None,
                 interrupt_before=self._collect_interrupt_before() or None,
                 interrupt_after=self._collect_interrupt_after() or None,
-                debug=self._debug_provider.get_debug() if self._debug_provider else False,
+                debug=self._debug_provider.get_debug()
+                if self._debug_provider
+                else False,
                 name=self._name_provider.get_name() if self._name_provider else None,
-                cache=self._cache_provider.get_cache() if self._cache_provider else None,
+                cache=self._cache_provider.get_cache()
+                if self._cache_provider
+                else None,
                 transformers=self._collect_transformers() or None,
             )
         except Exception:
@@ -797,6 +844,7 @@ class PluginAgentLoop:
             self._graph = None
 
     def invoke(self, message: str, *, thread_id: str | None = None) -> Any:
+        self._require_available_presentation()
         if self._graph is None:
             self._rebuild()
         if self._graph is None:
@@ -878,6 +926,7 @@ class PluginAgentLoop:
     async def astream(
         self, message: str, *, thread_id: str | None = None, resume: Any = None
     ) -> AsyncIterator[dict[str, Any]]:
+        self._require_available_presentation()
         if self._graph is None:
             self._rebuild()
         if self._graph is None:
@@ -885,9 +934,11 @@ class PluginAgentLoop:
         config = {"configurable": {"thread_id": thread_id}} if thread_id else None
         previous_content: dict[str, str] = {}
         usage_totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-        input_value: Any = Command(resume=resume) if resume is not None else {
-            "messages": [{"role": "user", "content": message}]
-        }
+        input_value: Any = (
+            Command(resume=resume)
+            if resume is not None
+            else {"messages": [{"role": "user", "content": message}]}
+        )
 
         def run_graph(payload: Any) -> Any:
             return self._graph.astream(
@@ -949,11 +1000,18 @@ class PluginAgentLoop:
 
     def describe(self) -> dict[str, Any]:
         llm_info = self._llm_provider.get_plugin_info() if self._llm_provider else None
+        available = self._presentation_mode() == "native"
         return {
             "llm": llm_info,
-            "tools": [getattr(tool, "name", str(tool)) for tool in self._collect_tools()],
-            "tool_headlines": self._collect_tool_headlines(),
-            "middleware": [middleware.name for middleware in self._collect_middlewares()],
+            "tools": (
+                [getattr(tool, "name", str(tool)) for tool in self._collect_tools()]
+                if available
+                else []
+            ),
+            "tool_headlines": self._collect_tool_headlines() if available else {},
+            "middleware": [
+                middleware.name for middleware in self._collect_middlewares()
+            ],
         }
 
     def _collect_tool_headlines(self) -> dict[str, str]:
