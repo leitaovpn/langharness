@@ -68,10 +68,12 @@ class RichInteractiveRenderer:
         self.console = Console()
         self._model = ""
         self._segments: list[str | _ToolRun] = []
+        self._answer_parts: list[str] = []
         self._tool_runs: dict[str, _ToolRun] = {}
         self._session_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         self._response_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         self._status = "idle"
+        self._goal_status: str | None = None
         self._live: Live | None = None
         self._last_frame = float("-inf")
         self._spinner_idx = 0
@@ -128,9 +130,11 @@ class RichInteractiveRenderer:
 
     def start_response(self) -> None:
         self._segments = []
+        self._answer_parts = []
         self._tool_runs = {}
         self._response_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         self._status = "thinking"
+        self._goal_status = None
         self._live = None
         self._last_frame = float("-inf")
         self._spinner_idx = 0
@@ -147,11 +151,26 @@ class RichInteractiveRenderer:
             self._on_usage(event)
         elif event_type == "error":
             self.show_error(str(event.get("message", "Unknown stream error")))
+        elif event_type == "goal_round_started":
+            self._goal_status = f"goal · round {event.get('round', '?')}"
+        elif event_type == "goal_status":
+            self._goal_status = f"goal · {event.get('status', 'unknown')}"
+        elif event_type == "goal_wrapup":
+            # An instruction to the model, not part of its answer.
+            pass
         # Unknown event types are ignored.
 
     def finish_response(self) -> None:
         self._flush_live()
         self._status = "idle"
+
+    def status_line(self) -> str | None:
+        """Return the one-line goal state for the current response."""
+        return self._goal_status
+
+    def answer_text(self) -> str:
+        """Return only text emitted by the model, without tool or status noise."""
+        return "".join(self._answer_parts)
 
     def expansion_text(self) -> str:
         """The detail the collapsed row withheld, as text.
@@ -202,6 +221,7 @@ class RichInteractiveRenderer:
     def _on_assistant(self, content: str) -> None:
         if not content:
             return
+        self._answer_parts.append(content)
         if not self.console.is_terminal:
             self.console.print(content, end="", highlight=False, markup=False)
             return
