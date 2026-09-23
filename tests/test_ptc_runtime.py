@@ -6,6 +6,7 @@ import asyncio
 from typing import Any
 
 import pytest
+from langchain_core.tools import StructuredTool
 
 from langharness_core.plugins.loop.agent_loop import PluginAgentLoop
 from langharness_core.plugins.presentation.runtime import (
@@ -26,6 +27,19 @@ class _Mode:
 
     def get_mode(self) -> str:
         return self.mode
+
+
+def _async_tool(name: str, *, read_only: bool) -> StructuredTool:
+    async def invoke(value: int) -> int:
+        await asyncio.sleep(0.1)
+        return value
+
+    return StructuredTool.from_function(
+        coroutine=invoke,
+        name=name,
+        description=f"Test {name} tool",
+        metadata={"read_only": read_only},
+    )
 
 
 @pytest.mark.asyncio
@@ -152,3 +166,32 @@ def test_loop_both_mode_keeps_native_tools_and_adds_run_code() -> None:
     loop._ptc_runtime = NodePTCRuntime()
 
     assert [tool.name for tool in loop._collect_tools()] == ["add", "run_code"]
+
+
+@pytest.mark.asyncio
+async def test_loop_serializes_writes_but_allows_read_only_calls() -> None:
+    reads = _async_tool("read", read_only=True)
+    writes = _async_tool("write", read_only=False)
+
+    class Provider:
+        def get_tools(self) -> list[Any]:
+            return [reads, writes]
+
+    loop = PluginAgentLoop()
+    loop._tool_providers = [Provider()]
+    loop._presentation_provider = _Mode("ptc")
+    loop._ptc_runtime = NodePTCRuntime()
+
+    read_start = asyncio.get_running_loop().time()
+    result = await loop._run_code(
+        "return await Promise.all([tools.read({value: 1}), tools.read({value: 2})]);"
+    )
+    assert result["result"] == [1, 2]
+    assert asyncio.get_running_loop().time() - read_start < 0.19
+
+    write_start = asyncio.get_running_loop().time()
+    result = await loop._run_code(
+        "return await Promise.all([tools.write({value: 1}), tools.write({value: 2})]);"
+    )
+    assert result["result"] == [1, 2]
+    assert asyncio.get_running_loop().time() - write_start >= 0.19

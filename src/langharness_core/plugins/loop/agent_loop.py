@@ -692,6 +692,14 @@ class PluginAgentLoop:
             for tool in self._collect_native_tools()
             if getattr(tool, "name", None) != "run_code"
         }
+        read_slots = asyncio.Semaphore(4)
+        write_lock = asyncio.Lock()
+
+        def is_read_only(tool: Any) -> bool:
+            metadata = getattr(tool, "metadata", None)
+            if not isinstance(metadata, Mapping):
+                return False
+            return bool(metadata.get("read_only", False))
 
         async def dispatch(name: str, args: Any) -> Any:
             tool = tools.get(name)
@@ -699,7 +707,11 @@ class PluginAgentLoop:
                 raise ValueError(f"Tool {name!r} is not available in this scope")
             if not isinstance(args, Mapping):
                 raise TypeError("Tool arguments must be an object")
-            return await tool.ainvoke(dict(args))
+            if is_read_only(tool):
+                async with read_slots:
+                    return await tool.ainvoke(dict(args))
+            async with write_lock:
+                return await tool.ainvoke(dict(args))
 
         result = cast(
             dict[str, Any],
