@@ -60,6 +60,28 @@ async def test_child_can_catch_a_failed_host_call() -> None:
 
 
 @pytest.mark.asyncio
+async def test_program_can_run_independent_host_calls_concurrently() -> None:
+    runtime = NodePTCRuntime()
+
+    async def dispatch(_name: str, args: Any) -> Any:
+        await asyncio.sleep(0.12)
+        return args["value"]
+
+    started = asyncio.get_running_loop().time()
+    result = await runtime.execute(
+        code=(
+            "const values = await Promise.all(["
+            "tools.wait({value: 1}), tools.wait({value: 2})]); return values;"
+        ),
+        sdk="",
+        dispatch=dispatch,
+    )
+
+    assert result["result"] == [1, 2]
+    assert asyncio.get_running_loop().time() - started < 0.22
+
+
+@pytest.mark.asyncio
 async def test_timeout_kills_the_child_process_group() -> None:
     runtime = NodePTCRuntime()
     result = await runtime.execute(

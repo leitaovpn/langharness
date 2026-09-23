@@ -78,6 +78,8 @@ class NodePTCRuntime:
         logs: list[str] = []
         root_call_id = f"ptc-{uuid.uuid4().hex}"
         audit: list[dict[str, Any]] = []
+        pending: set[asyncio.Task[None]] = set()
+        write_lock = asyncio.Lock()
         output_bytes = 0
         stderr_task = asyncio.create_task(process.stderr.read(MAX_OUTPUT_BYTES + 1))
         try:
@@ -108,10 +110,21 @@ class NodePTCRuntime:
                     message = json.loads(line)
                     kind = message.get("type")
                     if kind == "tool_call":
-                        await self._dispatch_call(
-                            process, message, dispatch, root_call_id, audit
+                        task = asyncio.create_task(
+                            self._dispatch_call(
+                                process,
+                                message,
+                                dispatch,
+                                root_call_id,
+                                audit,
+                                write_lock,
+                            )
                         )
+                        pending.add(task)
+                        task.add_done_callback(pending.discard)
                     elif kind == "done":
+                        if pending:
+                            await asyncio.gather(*pending)
                         process.stdin.close()
                         await process.stdin.wait_closed()
                         await process.wait()
@@ -161,6 +174,7 @@ class NodePTCRuntime:
         dispatch: Callable[[str, Any], Any],
         root_call_id: str,
         audit: list[dict[str, Any]],
+        write_lock: asyncio.Lock,
     ) -> None:
         assert process.stdin is not None
         call_id = str(message.get("id", ""))
@@ -206,8 +220,9 @@ class NodePTCRuntime:
                 error={"code": "tool_call_failed", "message": str(exc)},
                 duration_ms=int((time.monotonic() - started) * 1000),
             )
-        process.stdin.write(_encode_line(response))
-        await process.stdin.drain()
+        async with write_lock:
+            process.stdin.write(_encode_line(response))
+            await process.stdin.drain()
 
     async def _terminate(self, process: asyncio.subprocess.Process) -> None:
         if process.returncode is not None:
