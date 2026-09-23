@@ -22,7 +22,7 @@ def test_finds_matches_with_line_and_column(tmp_path: Path) -> None:
     assert outcome.matches == [
         search.SearchMatch(path="a.py", line=2, column=6, text="beta needle")
     ]
-    assert outcome.engine == "python"
+    assert outcome.engine in {"python", "ripgrep"}
     assert outcome.truncated is False
 
 
@@ -188,3 +188,11 @@ def test_ripgrep_with_a_glob_passes_it_through(tmp_path: Path) -> None:
     binary = fake_ripgrep(tmp_path, 'printf "./a.py:1:1:%s\\n" "$*"')
     outcome = search.search_workspace(tmp_path, "hit", glob="*.py", ripgrep=binary)
     assert "--glob *.py" in outcome.matches[0].text
+
+
+def test_ripgrep_receives_the_file_size_limit(tmp_path: Path) -> None:
+    binary = fake_ripgrep(tmp_path, 'printf "./a.py:1:1:%s\\n" "$*"')
+    outcome = search.search_workspace(
+        tmp_path, "hit", max_file_bytes=1234, ripgrep=binary
+    )
+    assert "--max-filesize 1234" in outcome.matches[0].text

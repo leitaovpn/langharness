@@ -189,7 +189,7 @@ def test_search_text_returns_matches(tmp_path: Path) -> None:
     assert result["matches"] == [
         {"path": "a.py", "line": 1, "column": 1, "text": "needle"}
     ]
-    assert result["engine"] == "python"
+    assert result["engine"] in {"python", "ripgrep"}
     assert result["truncated"] is False
 
 

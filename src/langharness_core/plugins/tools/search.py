@@ -107,9 +107,21 @@ def _matches_in(
 
 
 def _search_with_ripgrep(
-    root: Path, query: str, glob: str | None, binary: str
+    root: Path,
+    query: str,
+    glob: str | None,
+    binary: str,
+    max_file_bytes: int,
 ) -> tuple[list[SearchMatch], int]:
-    command = [binary, "--line-number", "--column", "--no-heading", "--color=never"]
+    command = [
+        binary,
+        "--line-number",
+        "--column",
+        "--no-heading",
+        "--color=never",
+        "--max-filesize",
+        str(max_file_bytes),
+    ]
     if glob:
         command += ["--glob", glob]
     for ignored in sorted(DEFAULT_IGNORED_DIRECTORIES):
@@ -159,7 +171,9 @@ def search_workspace(
     binary = ripgrep or find_ripgrep()
     if binary:
         try:
-            found, scanned = _search_with_ripgrep(root, query, glob, binary)
+            found, scanned = _search_with_ripgrep(
+                root, query, glob, binary, max_file_bytes
+            )
         except OSError:
             # A binary that cannot be executed is not an error the model can
             # act on; the pure-Python path answers the same question.
