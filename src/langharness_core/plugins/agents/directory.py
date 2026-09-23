@@ -379,6 +379,10 @@ class AgentDirectoryPlugin:
         self, agent: dict[str, Any], plugin: str
     ) -> dict[str, Any] | None:
         properties = dict(self.binding_properties(agent["id"], plugin))
+        if plugin == "tool-presentation" and preset_name_of(
+            self._configs.get(agent["id"], {})
+        ) == "ptc":
+            properties.setdefault("plugin.tools.presentation", "ptc")
         if plugin == "llm":
             properties = {**self._llm_defaults(), **properties}
             if not properties.get("plugin.model.name") and not properties.get(

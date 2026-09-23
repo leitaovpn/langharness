@@ -43,6 +43,25 @@ def agent_record(
     }
 
 
+def test_ptc_preset_sets_presentation_mode_and_honours_explicit_override() -> None:
+    directory = AgentDirectoryPlugin()
+    agent = agent_record("ptc_agent")
+    directory._configs["ptc_agent"] = {
+        "preset": {"properties": {"preset.name": "ptc"}}
+    }
+
+    assert directory._binding_properties(agent, "tool-presentation")[
+        "plugin.tools.presentation"
+    ] == "ptc"
+
+    directory._configs["ptc_agent"]["tool-presentation"] = {
+        "properties": {"plugin.tools.presentation": "both"}
+    }
+    assert directory._binding_properties(agent, "tool-presentation")[
+        "plugin.tools.presentation"
+    ] == "both"
+
+
 REQUIRED_MODULES = {
     "langharness_core.plugins.tools.workspace",
     "langharness_core.plugins.name.template_name",

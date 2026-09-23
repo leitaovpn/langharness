@@ -42,26 +42,34 @@ Required test coverage of 95% reached. Total coverage: 95.58%
   - 事件包含 `type=ptc_audit`、`sequence`、root/parent/sub call id、工具名、参数、状态、
     结果/错误和耗时；`started`、`completed`、`failed`、`cancelled` 分开记录。
   - 证据：`tests/test_ptc_runtime.py::test_ptc_stream_emits_audit_separately_from_model_tool_output`，
-    `test_timeout_audits_pending_child_as_cancelled`；组合测试 `21 passed`，Ruff、mypy 通过。
+    `test_timeout_audits_pending_child_as_cancelled`；组合测试 `22 passed`，Ruff、mypy 通过。
+    stream 输出 `type=ptc_audit`，模型 `tool_output`
+    不含 audit 字段。
 - [x] B2 pending 生命周期：Node 退出、超时、取消时等待/取消所有 host dispatch，并测试无悬挂任务。
   - 证据：`tests/test_ptc_runtime.py::test_cancellation_cleans_up_pending_host_dispatch`，
     `.venv/bin/pytest -q tests/test_ptc_runtime.py` → `11 passed`；Ruff、mypy 通过。
-- [x] B3 授权拒绝：PTC 模式下原生工具直调返回结构化错误；both 模式允许两条路径。
+- [ ] B3 授权拒绝：PTC 模式下原生工具直调返回结构化错误；both 模式允许两条路径。
   - 证据：`tests/test_ptc_runtime.py::test_ptc_rejects_direct_native_call_before_tool_runs`；
     fake model 直调 `danger` 得到 `Error: danger is not a valid tool, try one of [run_code]`，
-    原工具执行记录为空。
-- [x] B4 runtime 缺失：ptc/both 明确拒绝装配，不能静默降级 native。
+    原工具执行记录为空。待验证：`both` 的原生和程序两条路径，以及明确错误码。
+- [ ] B4 runtime 缺失：ptc/both 明确拒绝装配，不能静默降级 native。
   - 证据：`tests/test_ptc_runtime.py::test_ptc_requires_runtime_but_accepts_bound_runtime`。
-- [x] B5 prompt 完整性：加入 order 5000 SDK section，并证明 prompt 中的 SDK 与 wire schema 相同。
+    待验证：`both` 和真实 Pelix 服务缺失场景。
+- [ ] B5 prompt 完整性：加入 order 5000 SDK section，并证明 prompt 中的 SDK 与 wire schema 相同。
   - 证据：`tests/test_ptc_runtime.py::test_ptc_prompt_contains_scoped_sdk_after_policy`，
     断言 order 800 先于 order 5000，SDK 含 `add` 且排除 `run_code`。
+    待验证：模型实际收到的 prompt 与 wire schema 一致；`both` 模式指令正确。
 - [ ] B6 scope 隔离：两个 agent scope 的工具、模式、SDK 和 runtime dispatch 互不串用。
-- [x] B6 scope 隔离：两个 agent scope 的工具、模式、SDK 和 runtime dispatch 互不串用。
   - 证据：`tests/test_ptc_runtime.py::test_ptc_scope_switch_changes_sdk_and_dispatch_target`；
     alpha scope 仅得到 `alpha_tool` 并返回 11，beta scope 仅得到 `beta_tool` 并返回 21；
-    Ruff 通过，定向 pytest 通过。
+    Ruff 通过，定向 pytest 通过。待验证：两个真实 agent scope 的模式注入和 prompt 隔离。
 - [ ] B7 Pelix + fake model E2E：验证模型收到的 schema、程序并发读取、写入串行、审计和取消。
+  - 已验证：真实 Pelix/iPOPO 装配、模型只绑定 `run_code`、Node 子调用、审计事件、
+    模型结果隔离。测试：`tests/test_e2e.py::test_real_pelix_ptc_stream_exposes_only_run_code_and_audit`。
+  - 待验证：框架级并发读取、独占写入、恶意直调拒绝、取消排空。
 - [ ] B8 三协议验收：chat、anthropic、responses 各跑一轮，保存 NDJSON 结果和 artifact。
+  - 已验证：上述 fake model Pelix 流程按三个协议配置各跑一轮，测试写入并回读
+    `ptc-<protocol>.ndjson`，`3 passed`。待验证：真实协议适配器的调用格式和产物。
 - [ ] B9 完整质量门：所有 B 项完成后重新运行 `make check`，覆盖率保持至少 95%。
 
 ## 目标与边界
