@@ -125,6 +125,32 @@ async def test_cancellation_kills_the_child() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cancellation_cleans_up_pending_host_dispatch() -> None:
+    runtime = NodePTCRuntime()
+    cancelled = asyncio.Event()
+
+    async def dispatch(_name: str, _args: Any) -> Any:
+        try:
+            await asyncio.sleep(10)
+        finally:
+            cancelled.set()
+        return None
+
+    task = asyncio.create_task(
+        runtime.execute(
+            code="await tools.wait({});",
+            sdk="",
+            dispatch=dispatch,
+        )
+    )
+    await asyncio.sleep(0.15)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
 async def test_output_cap_stops_excessive_program_logs() -> None:
     runtime = NodePTCRuntime()
     with pytest.raises(OverflowError, match="output limit"):

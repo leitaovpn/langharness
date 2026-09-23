@@ -39,7 +39,9 @@ Required test coverage of 95% reached. Total coverage: 95.58%
 ### B. 待完成的小节
 
 - [ ] B1 审计事件模型：定义统一事件类型和顺序字段，接入 agent stream 或持久化审计服务。
-- [ ] B2 pending 生命周期：Node 退出、超时、取消时等待/取消所有 host dispatch，并测试无悬挂任务。
+- [x] B2 pending 生命周期：Node 退出、超时、取消时等待/取消所有 host dispatch，并测试无悬挂任务。
+  - 证据：`tests/test_ptc_runtime.py::test_cancellation_cleans_up_pending_host_dispatch`，
+    `.venv/bin/pytest -q tests/test_ptc_runtime.py` → `11 passed`；Ruff、mypy 通过。
 - [ ] B3 授权拒绝：PTC 模式下原生工具直调返回结构化错误；both 模式允许两条路径。
 - [ ] B4 runtime 缺失：ptc/both 明确拒绝装配，不能静默降级 native。
 - [ ] B5 prompt 完整性：加入 order 5000 SDK section，并证明 prompt 中的 SDK 与 wire schema 相同。

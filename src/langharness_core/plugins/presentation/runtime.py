@@ -164,6 +164,10 @@ class NodePTCRuntime:
             await self._terminate(process)
             raise
         finally:
+            if pending:
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
             if not stderr_task.done():
                 stderr_task.cancel()
 
