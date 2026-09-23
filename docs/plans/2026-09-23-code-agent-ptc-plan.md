@@ -108,19 +108,19 @@ Phase 2 明确实现。
 2. **稳定 typed SDK（已完成）**：基于 LangChain 工具的输入 JSON schema 和明确的输出 schema 生成
    排序稳定的 TypeScript 声明。`run_code` 永不进入 SDK；未声明输出形状时用
    `unknown`，不能猜测字段。测试同一工具集文本稳定、scope 切换、复杂 schema 和名称冲突。
-3. **进程运行时与 host binding**：新服务负责单次 Node 子进程、JSON 行协议、deadline、
+3. **进程运行时与 host binding（已完成）**：新服务负责单次 Node 子进程、JSON 行协议、deadline、
    进程组清理、输出/内存/pending 上限；绑定请求在 host 校验参数并调用原工具。测试
    超时、取消、进程残留、输出截断、可捕获子调用错误和结束排空。
-4. **调度与审计**：只读并发、写调用独占且按提交顺序；每个子调用记录开始和结算事件，
+4. **调度与审计（已完成）**：只读并发、写调用独占且按提交顺序；每个子调用记录开始和结算事件，
    带 root/parent/sub call id、参数、结果和耗时。测试并发屏障、审批/策略失败、不向模型
    泄漏中间结果。
-5. **呈现与执行授权**：loop 加入 scoped presenter。模型请求按模式提供工具 schema；
+5. **呈现与执行授权（已完成）**：loop 加入 scoped presenter。模型请求按模式提供工具 schema；
    dispatch 使用同一 mode 判据阻断 PTC 原生直调。`both` 同时允许原生与程序调用；
    runtime 缺失时拒绝 PTC 模式。测试三模式 schema 与恶意直调，覆盖同步和异步路径。
-6. **prompt 与 preset**：增加 order 800 的 PTC-only 指令和 order 5000 的 SDK section，
+6. **prompt 与 preset（已完成）**：增加 order 800 的 PTC-only 指令和 order 5000 的 SDK section，
    把 provider/runtime 装入 PTC preset；保持现有 `code` preset 为 native。测试 prompt 排序、
    SDK 与 wire schema 一致、不同 agent 互不串 scope。
-7. **端到端验收**：真实 Pelix + fake model 断言 PTC schema 严格为 `[run_code]`、程序内
+7. **端到端验收（已完成）**：真实 Pelix + fake model 断言 PTC schema 严格为 `[run_code]`、程序内
    并发读取、独占写入、直调被拒绝、审计完整、取消排空；三协议各跑一轮。
 
 Task 1 完成后仍只具备模式配置服务。Task 2–7 完成前不得把 `ptc` 加入默认 preset，也
