@@ -6,6 +6,9 @@ import asyncio
 from typing import Any
 
 import pytest
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import StructuredTool
 
 from langharness_core.plugins.loop.agent_loop import PluginAgentLoop
@@ -13,7 +16,32 @@ from langharness_core.plugins.presentation.runtime import (
     MAX_OUTPUT_BYTES,
     NodePTCRuntime,
 )
+from langharness_core.plugins.prompts.ptc import PTCPromptPlugin
 from langharness_core.plugins.tools.tools import add
+
+
+class _MaliciousModel(BaseChatModel):
+    calls: int = 0
+
+    @property
+    def _llm_type(self) -> str:
+        return "ptc-malicious-test"
+
+    def bind_tools(self, tools: Any, **kwargs: Any) -> Any:
+        return self
+
+    def _generate(
+        self, messages: Any, stop: Any = None, run_manager: Any = None, **kwargs: Any
+    ) -> ChatResult:
+        self.calls += 1
+        if self.calls == 1:
+            message = AIMessage(
+                content="",
+                tool_calls=[{"name": "danger", "args": {}, "id": "bad-1"}],
+            )
+        else:
+            message = AIMessage(content="done")
+        return ChatResult(generations=[ChatGeneration(message=message)])
 
 
 class _ToolProvider:
@@ -192,6 +220,66 @@ def test_loop_both_mode_keeps_native_tools_and_adds_run_code() -> None:
     loop._ptc_runtime = NodePTCRuntime()
 
     assert [tool.name for tool in loop._collect_tools()] == ["add", "run_code"]
+
+
+def test_ptc_requires_runtime_but_accepts_bound_runtime() -> None:
+    loop = PluginAgentLoop()
+    loop._presentation_provider = _Mode("ptc")
+    with pytest.raises(RuntimeError, match="PTC runtime"):
+        loop._require_available_presentation()
+    loop._ptc_runtime = NodePTCRuntime()
+    loop._require_available_presentation()
+
+
+def test_ptc_rejects_direct_native_call_before_tool_runs() -> None:
+    executed: list[str] = []
+
+    def danger() -> str:
+        """A tool that must not run directly in PTC mode."""
+        executed.append("ran")
+        return "unsafe"
+
+    native = StructuredTool.from_function(func=danger)
+
+    class Provider:
+        def get_tools(self) -> list[Any]:
+            return [native]
+
+    loop = PluginAgentLoop()
+    loop._llm_provider = type("LLM", (), {"get_model": lambda _: _MaliciousModel()})()
+    loop._tool_providers = [Provider()]
+    loop._presentation_provider = _Mode("ptc")
+    loop._ptc_runtime = NodePTCRuntime()
+
+    result = loop.invoke("try direct tool")
+
+    assert executed == []
+    denied = [message for message in result["messages"] if isinstance(message, ToolMessage)]
+    assert len(denied) == 1
+    assert denied[0].tool_call_id == "bad-1"
+    assert "danger" in str(denied[0].content)
+
+
+def test_ptc_prompt_contains_scoped_sdk_after_policy() -> None:
+    loop = PluginAgentLoop()
+    loop._tool_providers = [_ToolProvider()]
+    loop._presentation_provider = _Mode("ptc")
+    loop._ptc_runtime = NodePTCRuntime()
+    prompt = PTCPromptPlugin()
+    prompt._presentation = loop._presentation_provider
+    loop._prompt_section_providers = [prompt]
+
+    assembled = loop._prompt_for_request({"messages": []})
+
+    policy = next(trace for trace in assembled.traces if trace.name == "ptc-only")
+    sdk = next(trace for trace in assembled.traces if trace.name == "ptc-sdk")
+    assert policy.order == 800
+    assert sdk.order == 5000
+    assert assembled.text.index("run_code is the only tool") < assembled.text.index(
+        "type ToolArgsMap"
+    )
+    assert '"add"' in assembled.text
+    assert '"run_code"' not in assembled.text
 
 
 @pytest.mark.asyncio

@@ -739,7 +739,7 @@ class PluginAgentLoop:
         return str(self._presentation_provider.get_mode())
 
     def _require_available_presentation(self) -> None:
-        if self._presentation_mode() != "native":
+        if self._presentation_mode() != "native" and self._ptc_runtime is None:
             raise RuntimeError("PTC runtime is not available for this agent")
 
     def _collect_middlewares(self) -> list[Any]:
@@ -823,6 +823,15 @@ class PluginAgentLoop:
                     "Prompt section provider %s failed; its section was dropped",
                     getattr(provider, "_plugin_key", provider),
                 )
+        if self._presentation_mode() in {"ptc", "both"}:
+            sections.append(
+                PromptSection(
+                    name="ptc-sdk",
+                    order=5000,
+                    text=render_tool_sdk(self._collect_native_tools()),
+                    source="langharness_core.plugins.presentation.sdk",
+                )
+            )
         assembled = assemble_sections(sections)
         if assembled.traces:
             LOGGER.debug(

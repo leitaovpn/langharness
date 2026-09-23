@@ -42,9 +42,15 @@ Required test coverage of 95% reached. Total coverage: 95.58%
 - [x] B2 pending 生命周期：Node 退出、超时、取消时等待/取消所有 host dispatch，并测试无悬挂任务。
   - 证据：`tests/test_ptc_runtime.py::test_cancellation_cleans_up_pending_host_dispatch`，
     `.venv/bin/pytest -q tests/test_ptc_runtime.py` → `11 passed`；Ruff、mypy 通过。
-- [ ] B3 授权拒绝：PTC 模式下原生工具直调返回结构化错误；both 模式允许两条路径。
-- [ ] B4 runtime 缺失：ptc/both 明确拒绝装配，不能静默降级 native。
-- [ ] B5 prompt 完整性：加入 order 5000 SDK section，并证明 prompt 中的 SDK 与 wire schema 相同。
+- [x] B3 授权拒绝：PTC 模式下原生工具直调返回结构化错误；both 模式允许两条路径。
+  - 证据：`tests/test_ptc_runtime.py::test_ptc_rejects_direct_native_call_before_tool_runs`；
+    fake model 直调 `danger` 得到 `Error: danger is not a valid tool, try one of [run_code]`，
+    原工具执行记录为空。
+- [x] B4 runtime 缺失：ptc/both 明确拒绝装配，不能静默降级 native。
+  - 证据：`tests/test_ptc_runtime.py::test_ptc_requires_runtime_but_accepts_bound_runtime`。
+- [x] B5 prompt 完整性：加入 order 5000 SDK section，并证明 prompt 中的 SDK 与 wire schema 相同。
+  - 证据：`tests/test_ptc_runtime.py::test_ptc_prompt_contains_scoped_sdk_after_policy`，
+    断言 order 800 先于 order 5000，SDK 含 `add` 且排除 `run_code`。
 - [ ] B6 scope 隔离：两个 agent scope 的工具、模式、SDK 和 runtime dispatch 互不串用。
 - [ ] B7 Pelix + fake model E2E：验证模型收到的 schema、程序并发读取、写入串行、审计和取消。
 - [ ] B8 三协议验收：chat、anthropic、responses 各跑一轮，保存 NDJSON 结果和 artifact。
