@@ -38,7 +38,11 @@ Required test coverage of 95% reached. Total coverage: 95.58%
 
 ### B. 待完成的小节
 
-- [ ] B1 审计事件模型：定义统一事件类型和顺序字段，接入 agent stream 或持久化审计服务。
+- [x] B1 审计事件模型：定义统一事件类型和顺序字段，接入 agent stream 或持久化审计服务。
+  - 事件包含 `type=ptc_audit`、`sequence`、root/parent/sub call id、工具名、参数、状态、
+    结果/错误和耗时；`started`、`completed`、`failed`、`cancelled` 分开记录。
+  - 证据：`tests/test_ptc_runtime.py::test_ptc_stream_emits_audit_separately_from_model_tool_output`，
+    `test_timeout_audits_pending_child_as_cancelled`；组合测试 `21 passed`，Ruff、mypy 通过。
 - [x] B2 pending 生命周期：Node 退出、超时、取消时等待/取消所有 host dispatch，并测试无悬挂任务。
   - 证据：`tests/test_ptc_runtime.py::test_cancellation_cleans_up_pending_host_dispatch`，
     `.venv/bin/pytest -q tests/test_ptc_runtime.py` → `11 passed`；Ruff、mypy 通过。

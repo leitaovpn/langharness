@@ -151,11 +151,15 @@ class NodePTCRuntime:
                         raise ValueError(f"Unknown PTC protocol message: {kind!r}")
         except TimeoutError:
             await self._terminate(process)
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
             return {
                 "logs": logs,
                 "error": {"name": "TimeoutError", "message": "PTC deadline exceeded"},
                 "isolation": "process-only",
                 "duration_ms": int((time.monotonic() - started) * 1000),
+                "audit": audit,
             }
         except asyncio.CancelledError:
             await self._terminate(process)
@@ -184,6 +188,8 @@ class NodePTCRuntime:
         call_id = str(message.get("id", ""))
         started = time.monotonic()
         event = {
+            "type": "ptc_audit",
+            "sequence": len(audit) + 1,
             "root_call_id": root_call_id,
             "parent_call_id": root_call_id,
             "call_id": f"{root_call_id}/{call_id}",
@@ -208,22 +214,34 @@ class NodePTCRuntime:
                 "id": call_id,
                 "result": result,
             }
-            event.update(
-                status="completed",
-                result=result,
-                duration_ms=int((time.monotonic() - started) * 1000),
-            )
+            audit.append({
+                **event,
+                "sequence": len(audit) + 1,
+                "status": "completed",
+                "result": result,
+                "duration_ms": int((time.monotonic() - started) * 1000),
+            })
+        except asyncio.CancelledError:
+            audit.append({
+                **event,
+                "sequence": len(audit) + 1,
+                "status": "cancelled",
+                "duration_ms": int((time.monotonic() - started) * 1000),
+            })
+            raise
         except Exception as exc:
             response = {
                 "type": "tool_result",
                 "id": call_id,
                 "error": {"code": "tool_call_failed", "message": str(exc)},
             }
-            event.update(
-                status="failed",
-                error={"code": "tool_call_failed", "message": str(exc)},
-                duration_ms=int((time.monotonic() - started) * 1000),
-            )
+            audit.append({
+                **event,
+                "sequence": len(audit) + 1,
+                "status": "failed",
+                "error": {"code": "tool_call_failed", "message": str(exc)},
+                "duration_ms": int((time.monotonic() - started) * 1000),
+            })
         async with write_lock:
             process.stdin.write(_encode_line(response))
             await process.stdin.drain()

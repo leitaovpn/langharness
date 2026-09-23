@@ -45,6 +45,30 @@ class _MaliciousModel(BaseChatModel):
         return ChatResult(generations=[ChatGeneration(message=message)])
 
 
+class _RunCodeModel(_MaliciousModel):
+    def _generate(
+        self, messages: Any, stop: Any = None, run_manager: Any = None, **kwargs: Any
+    ) -> ChatResult:
+        self.calls += 1
+        if self.calls == 1:
+            message = AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "run_code",
+                        "args": {
+                            "code": "return await tools.add({a: 4, b: 6});",
+                            "description": "sum",
+                        },
+                        "id": "ptc-outer-1",
+                    }
+                ],
+            )
+        else:
+            message = AIMessage(content="done")
+        return ChatResult(generations=[ChatGeneration(message=message)])
+
+
 class _ToolProvider:
     def get_tools(self) -> list[Any]:
         return [add]
@@ -84,7 +108,10 @@ async def test_runtime_returns_only_program_output_and_process_isolation() -> No
     assert result["result"] == 5
     assert result["isolation"] == "process-only"
     assert result["logs"] == []
-    assert result["audit"][0]["status"] == "completed"
+    assert [event["status"] for event in result["audit"]] == [
+        "started", "completed"
+    ]
+    assert [event["sequence"] for event in result["audit"]] == [1, 2]
     assert result["audit"][0]["name"] == "add"
     assert result["audit"][0]["call_id"].startswith("ptc-")
 
@@ -135,6 +162,27 @@ async def test_timeout_kills_the_child_process_group() -> None:
     )
     assert result["error"]["name"] == "TimeoutError"
     assert result["duration_ms"] < 2000
+
+
+@pytest.mark.asyncio
+async def test_timeout_audits_pending_child_as_cancelled() -> None:
+    runtime = NodePTCRuntime()
+
+    async def dispatch(_name: str, _args: Any) -> Any:
+        await asyncio.sleep(10)
+        return None
+
+    result = await runtime.execute(
+        code="await tools.wait({});",
+        sdk="",
+        dispatch=dispatch,
+        timeout_ms=100,
+    )
+
+    assert result["error"]["name"] == "TimeoutError"
+    assert [event["status"] for event in result["audit"]] == [
+        "started", "cancelled"
+    ]
 
 
 @pytest.mark.asyncio
@@ -281,6 +329,26 @@ def test_ptc_prompt_contains_scoped_sdk_after_policy() -> None:
     )
     assert '"add"' in assembled.text
     assert '"run_code"' not in assembled.text
+
+
+@pytest.mark.asyncio
+async def test_ptc_stream_emits_audit_separately_from_model_tool_output() -> None:
+    loop = PluginAgentLoop()
+    loop._llm_provider = type("LLM", (), {"get_model": lambda _: _RunCodeModel()})()
+    loop._tool_providers = [_ToolProvider()]
+    loop._presentation_provider = _Mode("ptc")
+    loop._ptc_runtime = NodePTCRuntime()
+
+    events = [event async for event in loop.astream("sum")]
+
+    audit = [event for event in events if event["type"] == "ptc_audit"]
+    outputs = [event for event in events if event["type"] == "tool_output"]
+    assert len(audit) == 2
+    assert [event["status"] for event in audit] == ["started", "completed"]
+    assert audit[0]["call_id"] == audit[1]["call_id"]
+    assert audit[1]["result"] == 10
+    assert len(outputs) == 1
+    assert "audit" not in outputs[0]["output"]
 
 
 @pytest.mark.asyncio

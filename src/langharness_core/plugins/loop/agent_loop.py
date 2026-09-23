@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, cast
 
@@ -73,6 +74,9 @@ from langharness_plugin.scoped_dependencies import ScopedDependencies
 from langharness_plugin.validation import ContractGuard
 
 LOGGER = logging.getLogger("langharness.agent")
+PTC_AUDIT_EVENTS: ContextVar[list[dict[str, Any]] | None] = ContextVar(
+    "ptc_audit_events", default=None
+)
 
 
 def _extract_usage(message: Any) -> dict[str, int] | None:
@@ -724,7 +728,10 @@ class PluginAgentLoop:
         )
         # Audit entries stay host-side; exposing them in the model tool result
         # would leak intermediate sub-call arguments and values.
-        result.pop("audit", None)
+        audit = result.pop("audit", [])
+        collector = PTC_AUDIT_EVENTS.get()
+        if collector is not None:
+            collector.extend(audit)
         return result
 
     def _collect_native_tools(self) -> list[Any]:
@@ -946,6 +953,7 @@ class PluginAgentLoop:
         stream: AsyncIterator[tuple[str, Any]],
         previous_content: dict[str, str],
         usage_totals: dict[str, int],
+        audit_events: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Translate one graph run's chunks into stream events.
 
@@ -953,6 +961,9 @@ class PluginAgentLoop:
         share exactly one translator instead of two copies that can drift.
         """
         async for stream_type, chunk in stream:
+            if audit_events:
+                while audit_events:
+                    yield audit_events.pop(0)
             for job_event in self._drain_job_events():
                 yield job_event
             if stream_type == "messages":
@@ -1009,6 +1020,9 @@ class PluginAgentLoop:
                             "tool_call_id": tool_call["id"],
                             "args": tool_call["args"],
                         }
+        if audit_events:
+            while audit_events:
+                yield audit_events.pop(0)
 
     async def astream(
         self, message: str, *, thread_id: str | None = None, resume: Any = None
@@ -1021,21 +1035,27 @@ class PluginAgentLoop:
         config = {"configurable": {"thread_id": thread_id}} if thread_id else None
         previous_content: dict[str, str] = {}
         usage_totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        audit_events: list[dict[str, Any]] = []
         input_value: Any = (
             Command(resume=resume)
             if resume is not None
             else {"messages": [{"role": "user", "content": message}]}
         )
 
-        def run_graph(payload: Any) -> Any:
-            return self._graph.astream(
-                payload, config=config, stream_mode=["messages", "updates"]
-            )
+        async def run_graph(payload: Any) -> AsyncIterator[tuple[str, Any]]:
+            token = PTC_AUDIT_EVENTS.set(audit_events)
+            try:
+                async for chunk in self._graph.astream(
+                    payload, config=config, stream_mode=["messages", "updates"]
+                ):
+                    yield chunk
+            finally:
+                PTC_AUDIT_EVENTS.reset(token)
 
         rounds_run = 0
         while True:
             async for event in self._forward_stream(
-                run_graph(input_value), previous_content, usage_totals
+                run_graph(input_value), previous_content, usage_totals, audit_events
             ):
                 yield event
             decision = self._decide(rounds_run)
@@ -1079,6 +1099,7 @@ class PluginAgentLoop:
                 run_graph({"messages": [{"role": "user", "content": decision.wrapup}]}),
                 previous_content,
                 usage_totals,
+                audit_events,
             ):
                 yield event
             break
