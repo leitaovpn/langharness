@@ -87,10 +87,107 @@ class _StatusResult(BaseModel):
     truncated: bool
 
 
+class _ExecResult(BaseModel):
+    command: list[str]
+    cwd: str
+    exit_code: int
+    output: str
+    truncated: bool
+    duration_ms: int
+
+
+class _StartedJob(BaseModel):
+    job_id: str
+    state: str
+    command: list[str]
+    cwd: str
+
+
+class _WaitedJob(BaseModel):
+    job_id: str
+    state: str
+    exit_code: int | None
+    output: str
+    truncated: bool
+    new_output: bool
+
+
+class _WrittenStdin(BaseModel):
+    job_id: str
+    state: str
+    written: int
+
+
+class _StoppedJob(BaseModel):
+    job_id: str
+    state: str
+    exit_code: int | None
+
+
+class _Criterion(BaseModel):
+    id: str
+    text: str
+    evidence: str | None
+
+
+class _Goal(BaseModel):
+    id: str
+    revision: int
+    objective: str
+    status: str
+    rounds_started: int
+    max_rounds: int
+    acceptance_criteria: list[_Criterion]
+    blocker_history: list[str]
+
+
+class _GoalResult(BaseModel):
+    goal: _Goal | None
+
+
+class _GoalAction(BaseModel):
+    status: Literal["complete", "blocked"]
+    goal_id: str
+    revision: int
+    summary: str
+    report_id: str | None
+
+
+class _VerificationCheck(BaseModel):
+    name: str
+    exit_code: int
+    duration_ms: int
+
+
+class _VerificationResult(BaseModel):
+    report_id: str
+    goal_revision: int
+    mutation_generation: int
+    passed: bool
+    checks: list[_VerificationCheck]
+    would_complete: bool
+    blockers: list[str]
+
+
+class _AskUserResult(BaseModel):
+    status: Literal["awaiting_user"]
+    goal_id: str
+    question: str
+    note: str
+
+
 OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "list_directory": TypeAdapter(_ListResult | _Failure).json_schema(),
     "read_file": TypeAdapter(_ReadResult | _Failure).json_schema(),
     "search_text": TypeAdapter(_SearchResult | _Failure).json_schema(),
     "apply_patch": TypeAdapter(_PatchResult | _Failure).json_schema(),
     "workspace_status": _StatusResult.model_json_schema(),
+    "exec_command": TypeAdapter(_ExecResult | _StartedJob | _Failure).json_schema(),
+    "wait_job": TypeAdapter(_WaitedJob | _Failure).json_schema(),
+    "write_stdin": TypeAdapter(_WrittenStdin | _Failure).json_schema(),
+    "stop_job": TypeAdapter(_StoppedJob | _Failure).json_schema(),
+    "get_goal": _GoalResult.model_json_schema(),
+    "finish_goal": TypeAdapter(_GoalAction | _Failure).json_schema(),
+    "verify": TypeAdapter(_VerificationResult | _Failure).json_schema(),
+    "ask_user": TypeAdapter(_AskUserResult | _Failure).json_schema(),
 }

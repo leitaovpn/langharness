@@ -28,6 +28,7 @@ from langharness_core.plugins.exec.runner import (
     build_environment,
     run_command,
 )
+from langharness_core.plugins.tools.output_schemas import OUTPUT_SCHEMAS
 from langharness_core.plugins.workspace.paths import (
     WorkspacePathError,
     resolve_workspace_path,
@@ -257,6 +258,7 @@ class ExecToolsPlugin:
                 "details}}."
             ),
             args_schema=ExecCommandArgs,
+            metadata={"output_schema": OUTPUT_SCHEMAS["exec_command"]},
         )
 
     def _wait_tool(self) -> StructuredTool:
@@ -302,6 +304,7 @@ class ExecToolsPlugin:
                 "retryable, details}}."
             ),
             args_schema=WaitJobArgs,
+            metadata={"output_schema": OUTPUT_SCHEMAS["wait_job"]},
         )
 
     def _stdin_tool(self) -> StructuredTool:
@@ -327,6 +330,7 @@ class ExecToolsPlugin:
                 "already stopped taking input."
             ),
             args_schema=WriteStdinArgs,
+            metadata={"output_schema": OUTPUT_SCHEMAS["write_stdin"]},
         )
 
     def _stop_tool(self) -> StructuredTool:
@@ -356,5 +360,5 @@ class ExecToolsPlugin:
                 "details}}."
             ),
             args_schema=JobIdArgs,
+            metadata={"output_schema": OUTPUT_SCHEMAS["stop_job"]},
         )
-

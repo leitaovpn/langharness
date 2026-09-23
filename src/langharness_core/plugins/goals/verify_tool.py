@@ -29,6 +29,7 @@ from langharness_core.contracts import (
     WorkspaceStateProvider,
 )
 from langharness_core.plugins.goals.gate import evaluate_completion
+from langharness_core.plugins.tools.output_schemas import OUTPUT_SCHEMAS
 from langharness_plugin.scoped_dependencies import ScopedDependencies
 from langharness_plugin.validation import ContractGuard
 
@@ -150,4 +151,5 @@ class VerifyToolPlugin:
                 "retryable, details}} when there is no active goal."
             ),
             args_schema=NoArgs,
+            metadata={"output_schema": OUTPUT_SCHEMAS["verify"]},
         )

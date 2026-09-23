@@ -26,6 +26,7 @@ from langharness_core.contracts import (
 )
 from langharness_core.plugins.goals.gate import evaluate_completion
 from langharness_core.plugins.goals.sqlite import BLOCKER_THRESHOLD, GoalConflictError
+from langharness_core.plugins.tools.output_schemas import OUTPUT_SCHEMAS
 from langharness_plugin.scoped_dependencies import ScopedDependencies
 from langharness_plugin.validation import ContractGuard
 
@@ -150,6 +151,7 @@ class GoalToolsPlugin:
                 "\"evidence\": str|null}], \"blocker_history\": [str]}|null}."
             ),
             args_schema=NoArgs,
+            metadata={"output_schema": OUTPUT_SCHEMAS["get_goal"]},
         )
 
     def _finish_tool(self) -> StructuredTool:
@@ -191,6 +193,7 @@ class GoalToolsPlugin:
                 "unmet gate condition."
             ),
             args_schema=FinishGoalArgs,
+            metadata={"output_schema": OUTPUT_SCHEMAS["finish_goal"]},
         )
 
     def _complete(

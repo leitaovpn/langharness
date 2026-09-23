@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from langharness_core.common.tool_error import tool_error
 from langharness_core.contracts import GoalProvider, ToolProvider
 from langharness_core.plugins.goals.sqlite import GoalConflictError
+from langharness_core.plugins.tools.output_schemas import OUTPUT_SCHEMAS
 from langharness_plugin.scoped_dependencies import ScopedDependencies
 from langharness_plugin.validation import ContractGuard
 
@@ -119,4 +120,5 @@ class AskUserToolPlugin:
                 "details}}."
             ),
             args_schema=AskUserArgs,
+            metadata={"output_schema": OUTPUT_SCHEMAS["ask_user"]},
         )

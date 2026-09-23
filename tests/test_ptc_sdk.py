@@ -9,6 +9,10 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, Field
 
+from langharness_core.plugins.exec.tools import ExecToolsPlugin
+from langharness_core.plugins.goals.ask_user import AskUserToolPlugin
+from langharness_core.plugins.goals.tools import GoalToolsPlugin
+from langharness_core.plugins.goals.verify_tool import VerifyToolPlugin
 from langharness_core.plugins.presentation.sdk import render_tool_sdk
 from langharness_core.plugins.tools.code_workspace import CodeWorkspaceToolsPlugin
 from langharness_core.plugins.workspace.root import WorkspaceRootPlugin
@@ -116,3 +120,35 @@ def test_builtin_workspace_sdk_describes_success_and_error_results(
     assert '"sha256": string' in sdk
     assert '"matches": Array<' in sdk
     assert '"error": {' in sdk
+
+
+def test_builtin_exec_sdk_describes_foreground_background_and_errors() -> None:
+    provider = ExecToolsPlugin()
+    provider._workspace = object()
+    provider._jobs = object()
+
+    sdk = render_tool_sdk(provider.get_tools())
+
+    assert '"exec_command": unknown' not in sdk
+    assert '"exit_code": number' in sdk
+    assert '"job_id": string' in sdk
+    assert '"error": {' in sdk
+
+
+def test_builtin_goal_sdk_describes_goal_and_verification_results() -> None:
+    goals = GoalToolsPlugin()
+    goals._goals = object()
+    goals._verifier = object()
+    verifier = VerifyToolPlugin()
+    verifier._goals = object()
+    verifier._verifier = object()
+    ask = AskUserToolPlugin()
+    ask._goals = object()
+
+    sdk = render_tool_sdk([*goals.get_tools(), *verifier.get_tools(), *ask.get_tools()])
+
+    for name in ("get_goal", "finish_goal", "verify", "ask_user"):
+        assert f'"{name}": unknown' not in sdk
+    assert '"objective": string' in sdk
+    assert '"would_complete": boolean' in sdk
+    assert '"question": string' in sdk
