@@ -17,12 +17,16 @@ IDENTITY_ORDER = 0
 SAFETY_ORDER = 100
 WORKFLOW_ORDER = 200
 COMPLETION_ORDER = 300
+GOAL_ROUND_ORDER = 9000
+GOAL_WRAPUP_ORDER = 9001
 
 SECTIONS: tuple[tuple[str, int], ...] = (
     ("identity", IDENTITY_ORDER),
     ("safety", SAFETY_ORDER),
     ("workflow", WORKFLOW_ORDER),
     ("completion", COMPLETION_ORDER),
+    ("goal_round", GOAL_ROUND_ORDER),
+    ("goal_wrapup", GOAL_WRAPUP_ORDER),
 )
 
 RESOURCE_PACKAGE = "langharness_core"
@@ -42,7 +46,7 @@ def load_section(name: str) -> str:
 @Property("_plugin_name", "plugin.name", "code-agent-prompt")
 @Property("_plugin_version", "plugin.version", "1.0.0")
 class CodeAgentPromptPlugin:
-    """Contributes the static persona, safety, workflow and completion sections."""
+    """Contributes the static code-agent behavior and goal-lifecycle sections."""
 
     def __init__(self) -> None:
         self._plugin_name = "code-agent-prompt"
