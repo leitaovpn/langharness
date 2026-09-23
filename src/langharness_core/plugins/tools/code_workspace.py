@@ -26,6 +26,7 @@ from langharness_core.contracts import (
     WorkspaceStateProvider,
 )
 from langharness_core.plugins.tools import search as search_module
+from langharness_core.plugins.tools.output_schemas import OUTPUT_SCHEMAS
 from langharness_core.plugins.tools.patch import (
     PatchError,
     PatchPlan,
@@ -327,6 +328,7 @@ class CodeWorkspaceToolsPlugin:
                 "leaves the workspace or is not a directory."
             ),
             args_schema=ListDirectoryArgs,
+            metadata={"output_schema": OUTPUT_SCHEMAS["list_directory"]},
         )
 
     def _read_tool(self) -> StructuredTool:
@@ -384,6 +386,7 @@ class CodeWorkspaceToolsPlugin:
                 "details}}."
             ),
             args_schema=ReadFileArgs,
+            metadata={"output_schema": OUTPUT_SCHEMAS["read_file"]},
         )
 
     def _search_tool(self) -> StructuredTool:
@@ -431,6 +434,7 @@ class CodeWorkspaceToolsPlugin:
                 "regular expression."
             ),
             args_schema=SearchTextArgs,
+            metadata={"output_schema": OUTPUT_SCHEMAS["search_text"]},
         )
 
     def _patch_tool(self) -> StructuredTool:
@@ -504,6 +508,7 @@ class CodeWorkspaceToolsPlugin:
                 "workspace is left untouched."
             ),
             args_schema=PatchArgs,
+            metadata={"output_schema": OUTPUT_SCHEMAS["apply_patch"]},
         )
 
     def _status_tool(self) -> StructuredTool:
@@ -572,4 +577,5 @@ class CodeWorkspaceToolsPlugin:
                 "'agent'|'pre_existing'}], \"truncated\": bool}."
             ),
             args_schema=NoArgs,
+            metadata={"output_schema": OUTPUT_SCHEMAS["workspace_status"]},
         )

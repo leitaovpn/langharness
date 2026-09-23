@@ -65,6 +65,7 @@ PUBLIC_MODULES = [
     "langharness_core.plugins.tools.search",
     "langharness_core.plugins.tools.patch",
     "langharness_core.plugins.tools.code_workspace",
+    "langharness_core.plugins.tools.output_schemas",
     "langharness_core.plugins.goals.gate",
     "langharness_core.plugins.goals.sqlite",
     "langharness_core.plugins.goals.tools",

@@ -32,7 +32,7 @@ Phase 2 明确实现。
 1. **模式契约与可选插件（已完成）**：增加 `SPEC_TOOL_PRESENTATION`、Protocol、Pelix provider、
    catalog 与 template。测试无配置时为 native、合法模式可设置、无效模式被拒绝、不同
    agent scope 可选不同模式。此步骤不启用 PTC wire schema。
-2. **稳定 typed SDK（生成器已完成，内置工具输出标注待补）**：基于 LangChain 工具的输入 JSON schema 和明确的输出 schema 生成
+2. **稳定 typed SDK（生成器与 workspace 输出已完成，exec/goal 输出待补）**：基于 LangChain 工具的输入 JSON schema 和明确的输出 schema 生成
    排序稳定的 TypeScript 声明。`run_code` 永不进入 SDK；未声明输出形状时用
    `unknown`，不能猜测字段。测试同一工具集文本稳定、scope 切换、复杂 schema 和名称冲突。
 3. **进程运行时与 host binding**：新服务负责单次 Node 子进程、JSON 行协议、deadline、

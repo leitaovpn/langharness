@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -9,6 +10,8 @@ import pytest
 from pydantic import BaseModel, Field
 
 from langharness_core.plugins.presentation.sdk import render_tool_sdk
+from langharness_core.plugins.tools.code_workspace import CodeWorkspaceToolsPlugin
+from langharness_core.plugins.workspace.root import WorkspaceRootPlugin
 
 
 class ReadArgs(BaseModel):
@@ -96,3 +99,20 @@ def test_unsupported_output_schema_remains_unknown() -> None:
         [tool("read_file", ReadArgs, {"$ref": "#/missing/definition"})]
     )
     assert '"read_file": unknown' in sdk
+
+
+def test_builtin_workspace_sdk_describes_success_and_error_results(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceRootPlugin()
+    workspace._root = str(tmp_path)
+    provider = CodeWorkspaceToolsPlugin()
+    provider._workspace = workspace
+
+    sdk = render_tool_sdk(provider.get_tools())
+
+    assert '"read_file": unknown' not in sdk
+    assert '"text": string' in sdk
+    assert '"sha256": string' in sdk
+    assert '"matches": Array<' in sdk
+    assert '"error": {' in sdk
