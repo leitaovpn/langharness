@@ -8,6 +8,7 @@ import json
 import os
 import signal
 import time
+import uuid
 from collections.abc import Callable, Mapping
 from importlib.resources import files
 from typing import Any
@@ -75,6 +76,8 @@ class NodePTCRuntime:
         assert process.stdout is not None
         assert process.stderr is not None
         logs: list[str] = []
+        root_call_id = f"ptc-{uuid.uuid4().hex}"
+        audit: list[dict[str, Any]] = []
         output_bytes = 0
         stderr_task = asyncio.create_task(process.stderr.read(MAX_OUTPUT_BYTES + 1))
         try:
@@ -105,7 +108,9 @@ class NodePTCRuntime:
                     message = json.loads(line)
                     kind = message.get("type")
                     if kind == "tool_call":
-                        await self._dispatch_call(process, message, dispatch)
+                        await self._dispatch_call(
+                            process, message, dispatch, root_call_id, audit
+                        )
                     elif kind == "done":
                         process.stdin.close()
                         await process.stdin.wait_closed()
@@ -118,12 +123,14 @@ class NodePTCRuntime:
                                 "error": error,
                                 "isolation": "process-only",
                                 "duration_ms": int((time.monotonic() - started) * 1000),
+                                "audit": audit,
                             }
                         return {
                             "logs": logs + list(message.get("logs") or []),
                             "result": message.get("result"),
                             "isolation": "process-only",
                             "duration_ms": int((time.monotonic() - started) * 1000),
+                            "audit": audit,
                         }
                     elif kind == "log":
                         logs.append(str(message.get("text", "")))
@@ -152,9 +159,21 @@ class NodePTCRuntime:
         process: asyncio.subprocess.Process,
         message: dict[str, Any],
         dispatch: Callable[[str, Any], Any],
+        root_call_id: str,
+        audit: list[dict[str, Any]],
     ) -> None:
         assert process.stdin is not None
         call_id = str(message.get("id", ""))
+        started = time.monotonic()
+        event = {
+            "root_call_id": root_call_id,
+            "parent_call_id": root_call_id,
+            "call_id": f"{root_call_id}/{call_id}",
+            "name": str(message.get("name", "")),
+            "args": message.get("args"),
+            "status": "started",
+        }
+        audit.append(event)
         try:
             if inspect.iscoroutinefunction(dispatch):
                 result = await dispatch(
@@ -171,12 +190,22 @@ class NodePTCRuntime:
                 "id": call_id,
                 "result": result,
             }
+            event.update(
+                status="completed",
+                result=result,
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
         except Exception as exc:
             response = {
                 "type": "tool_result",
                 "id": call_id,
                 "error": {"code": "tool_call_failed", "message": str(exc)},
             }
+            event.update(
+                status="failed",
+                error={"code": "tool_call_failed", "message": str(exc)},
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
         process.stdin.write(_encode_line(response))
         await process.stdin.drain()
 

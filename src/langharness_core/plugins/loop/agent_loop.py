@@ -701,7 +701,7 @@ class PluginAgentLoop:
                 raise TypeError("Tool arguments must be an object")
             return await tool.ainvoke(dict(args))
 
-        return cast(
+        result = cast(
             dict[str, Any],
             await self._ptc_runtime.execute(
             code=code,
@@ -710,6 +710,10 @@ class PluginAgentLoop:
             timeout_ms=timeout_ms,
             ),
         )
+        # Audit entries stay host-side; exposing them in the model tool result
+        # would leak intermediate sub-call arguments and values.
+        result.pop("audit", None)
+        return result
 
     def _collect_native_tools(self) -> list[Any]:
         tools: list[Any] = []

@@ -41,6 +41,9 @@ async def test_runtime_returns_only_program_output_and_process_isolation() -> No
     assert result["result"] == 5
     assert result["isolation"] == "process-only"
     assert result["logs"] == []
+    assert result["audit"][0]["status"] == "completed"
+    assert result["audit"][0]["name"] == "add"
+    assert result["audit"][0]["call_id"].startswith("ptc-")
 
 
 @pytest.mark.asyncio
