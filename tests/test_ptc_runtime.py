@@ -16,6 +16,7 @@ from langharness_core.plugins.presentation.runtime import (
     MAX_OUTPUT_BYTES,
     NodePTCRuntime,
 )
+from langharness_core.plugins.presentation.sdk import render_tool_sdk
 from langharness_core.plugins.prompts.ptc import PTCPromptPlugin
 from langharness_core.plugins.tools.tools import add
 
@@ -280,6 +281,51 @@ def test_ptc_prompt_contains_scoped_sdk_after_policy() -> None:
     )
     assert '"add"' in assembled.text
     assert '"run_code"' not in assembled.text
+
+
+@pytest.mark.asyncio
+async def test_ptc_scope_switch_changes_sdk_and_dispatch_target() -> None:
+    async def alpha_tool(value: int) -> int:
+        return value + 10
+
+    async def beta_tool(value: int) -> int:
+        return value + 20
+
+    alpha = StructuredTool.from_function(
+        coroutine=alpha_tool, name="alpha_tool", description="Alpha tool"
+    )
+    beta = StructuredTool.from_function(
+        coroutine=beta_tool, name="beta_tool", description="Beta tool"
+    )
+
+    class Provider:
+        def __init__(self, scope: str, key: str, tool: Any) -> None:
+            self._plugin_scope_id = scope
+            self._plugin_key = key
+            self._tool = tool
+
+        def get_tools(self) -> list[Any]:
+            return [self._tool]
+
+    loop = PluginAgentLoop()
+    loop._tool_providers = [
+        Provider("agent:alpha", "alpha-tools", alpha),
+        Provider("agent:beta", "beta-tools", beta),
+    ]
+    loop._presentation_provider = _Mode("ptc")
+    loop._ptc_runtime = NodePTCRuntime()
+
+    loop._scope_chain = ["agent:alpha"]
+    alpha_sdk = render_tool_sdk(loop._collect_native_tools())
+    alpha_result = await loop._run_code("return await tools.alpha_tool({value: 1});")
+    loop._scope_chain = ["agent:beta"]
+    beta_sdk = render_tool_sdk(loop._collect_native_tools())
+    beta_result = await loop._run_code("return await tools.beta_tool({value: 1});")
+
+    assert '"alpha_tool"' in alpha_sdk and '"beta_tool"' not in alpha_sdk
+    assert '"beta_tool"' in beta_sdk and '"alpha_tool"' not in beta_sdk
+    assert alpha_result["result"] == 11
+    assert beta_result["result"] == 21
 
 
 @pytest.mark.asyncio

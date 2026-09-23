@@ -52,6 +52,10 @@ Required test coverage of 95% reached. Total coverage: 95.58%
   - 证据：`tests/test_ptc_runtime.py::test_ptc_prompt_contains_scoped_sdk_after_policy`，
     断言 order 800 先于 order 5000，SDK 含 `add` 且排除 `run_code`。
 - [ ] B6 scope 隔离：两个 agent scope 的工具、模式、SDK 和 runtime dispatch 互不串用。
+- [x] B6 scope 隔离：两个 agent scope 的工具、模式、SDK 和 runtime dispatch 互不串用。
+  - 证据：`tests/test_ptc_runtime.py::test_ptc_scope_switch_changes_sdk_and_dispatch_target`；
+    alpha scope 仅得到 `alpha_tool` 并返回 11，beta scope 仅得到 `beta_tool` 并返回 21；
+    Ruff 通过，定向 pytest 通过。
 - [ ] B7 Pelix + fake model E2E：验证模型收到的 schema、程序并发读取、写入串行、审计和取消。
 - [ ] B8 三协议验收：chat、anthropic、responses 各跑一轮，保存 NDJSON 结果和 artifact。
 - [ ] B9 完整质量门：所有 B 项完成后重新运行 `make check`，覆盖率保持至少 95%。
