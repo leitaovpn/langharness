@@ -15,21 +15,31 @@ PRESERVED_MARKERS = (
 )
 
 
-def _size(message: Mapping[str, Any]) -> int:
-    return len(json.dumps(dict(message), ensure_ascii=False, default=str).encode())
+def _content(message: Any) -> str:
+    if isinstance(message, Mapping):
+        return str(message.get("content", ""))
+    return str(getattr(message, "content", ""))
+
+
+def _size(message: Any) -> int:
+    if isinstance(message, Mapping):
+        value: Any = dict(message)
+    else:
+        value = getattr(message, "model_dump", lambda: str(message))()
+    return len(json.dumps(value, ensure_ascii=False, default=str).encode())
 
 
 def compress_messages(
-    messages: Iterable[Mapping[str, Any]], *, budget_bytes: int
-) -> list[dict[str, Any]]:
+    messages: Iterable[Any], *, budget_bytes: int
+) -> list[Any]:
     """Keep newest conversation plus marked control evidence under a byte budget."""
     if budget_bytes < 1:
         raise ValueError("budget_bytes must be positive")
-    source = [dict(message) for message in messages]
+    source = list(messages)
     marked = [
         index
         for index, message in enumerate(source)
-        if any(marker in str(message.get("content", "")).lower() for marker in PRESERVED_MARKERS)
+        if any(marker in _content(message).lower() for marker in PRESERVED_MARKERS)
     ]
     selected: set[int] = set()
     used = 0

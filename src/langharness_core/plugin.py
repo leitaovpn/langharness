@@ -106,6 +106,11 @@ AGENT_PLUGIN_CATALOG: dict[str, tuple[str, str, str]] = {
         "reviewer-plugin-factory",
         SPEC_REVIEWER,
     ),
+    "context-compression": (
+        "langharness_core.plugins.context.middleware",
+        "context-compression-middleware-plugin-factory",
+        SPEC_MIDDLEWARE,
+    ),
     "goal-tools": (
         "langharness_core.plugins.goals.tools",
         "goal-tools-plugin-factory",
@@ -328,6 +333,11 @@ AGENT_PLUGIN_DESCRIPTIONS: dict[str, str] = {
         "Optional independent review evidence provider. It is disabled by default "
         "and cannot complete a goal or bypass the project verifier. Properties: "
         "plugin.reviewer.enabled, plugin.agent_id."
+    ),
+    "context-compression": (
+        "Optional bounded context middleware. Disabled unless "
+        "plugin.context.budget_bytes is positive; preserves control evidence "
+        "while reducing message history."
     ),
     "repository-instructions": (
         "Contributes AGENTS.md and compatible instruction files from the "

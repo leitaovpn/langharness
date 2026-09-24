@@ -58,10 +58,10 @@
     verification、audit、approval、unfinished 标记的控制证据；输入预算非法时拒绝。
   - 证据：`tests/test_context_compression.py`。尚未把压缩器接入 LangGraph checkpoint
     transformer，也未完成 checkpoint round-trip 集成验证。
-  - 原拟通过 `create_agent(transformers=...)` 装配，但本地 LangChain 实际要求
-    `TransformerFactory(scope) -> StreamTransformer`，这是流事件转换，不是 checkpoint
-    或消息转换。因此撤销该错误的 agent plugin 装配；需改走 middleware/checkpointer
-    路径并完成真实 round-trip 验收。现有纯函数不得视为 E2 已完成。
+  - 已改走真实 `before_model` middleware：`context-compression` agent catalog 项在
+    `plugin.context.budget_bytes > 0` 时返回 state update，否则不注入；它不使用
+    `create_agent(transformers=...)` 的流事件接口。证据：`tests/test_context_middleware.py`。
+    尚未完成 checkpoint round-trip 集成验证。
 - [ ] P3-E3 cross-process goal resume：从 SQLite checkpoint 恢复 agent/session/goal 状态，
   防止重复完成和 revision 回退。
   - 已补 goal SQLite 的 `agent_id` 隔离和数据库级 revision CAS；同一数据库内两个
