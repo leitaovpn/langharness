@@ -56,15 +56,17 @@
   - 已新增纯函数 `compress_messages` 和纯状态投影
     `ContextCompressionTransformer`：按字节预算保留最新消息，并优先保留 goal、
     verification、audit、approval、unfinished 标记的控制证据；输入预算非法时拒绝。
-  - 证据：`tests/test_context_compression.py`。尚未把压缩器接入 LangGraph checkpoint
-    transformer，也未完成 checkpoint round-trip 集成验证。
+  - 证据：`tests/test_context_compression.py`。控制证据超出预算时现在明确报错，不再静默丢弃。
   - 已改走真实 `before_model` middleware：显式安装该可选 middleware 后，在
     `plugin.context.budget_bytes > 0` 时返回 state update，否则不注入；它不使用
     `create_agent(transformers=...)` 的流事件接口。证据：`tests/test_context_middleware.py`。
-    尚未完成 checkpoint round-trip 集成验证。
+    已通过真实 `create_agent` + SQLite checkpoint 的跨重启 round-trip 测试：
+    `tests/test_context_checkpoint.py` 验证保留 goal、新回合继续、过大的无关旧消息被删。
   - 已验证 LangGraph `add_messages` reducer：单纯返回压缩后的子集不会删除旧消息；
     middleware 现在在确需压缩时先发 `RemoveMessage(id=REMOVE_ALL_MESSAGES)` 再写入保留
     消息。见 `test_context_middleware_replaces_checkpoint_history`。
+  - 待完成：token 预算、结构化控制证据识别、工具调用与结果消息的成对保留，以及更广泛的
+    checkpoint/stream 语义验证；现有测试仅证明上述单线程 round-trip 场景。
 - [ ] P3-E3 cross-process goal resume：从 SQLite checkpoint 恢复 agent/session/goal 状态，
   防止重复完成和 revision 回退。
   - 已补 goal SQLite 的 `agent_id` 隔离和数据库级 revision CAS；同一数据库内两个

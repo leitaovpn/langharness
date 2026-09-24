@@ -43,6 +43,9 @@ def compress_messages(
     ]
     selected: set[int] = set()
     used = 0
+    required_bytes = sum(_size(source[index]) for index in marked)
+    if required_bytes > budget_bytes:
+        raise ValueError("control evidence exceeds context budget")
     for index in [*marked, *reversed(range(len(source)))]:
         if index in selected:
             continue

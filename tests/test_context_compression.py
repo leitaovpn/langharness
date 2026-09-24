@@ -32,6 +32,12 @@ def test_compression_rejects_invalid_budget() -> None:
         compress_messages([], budget_bytes=0)
 
 
+def test_control_evidence_cannot_be_silently_dropped() -> None:
+    messages = [{"role": "tool", "content": "approval unfinished: " + "x" * 200}]
+    with pytest.raises(ValueError, match="control evidence"):
+        compress_messages(messages, budget_bytes=50)
+
+
 def test_compression_keeps_original_order_when_budget_allows() -> None:
     messages = [
         {"role": "user", "content": "goal: build"},
