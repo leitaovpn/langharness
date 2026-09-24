@@ -8,6 +8,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from langharness_core.contracts import SPEC_GOAL, SPEC_TOOL, SPEC_VERIFIER
 from langharness_plugin.plugin_manager import PluginManager
 from langharness_plugin.registry import PluginDescriptor, PluginRegistry
@@ -117,3 +119,40 @@ def test_the_goal_tool_gets_its_own_scopes_services(tmp_path: Path) -> None:
         assert names == {"get_goal", "finish_goal"}
     finally:
         manager.stop()
+
+
+def test_shared_goal_database_is_scoped_after_framework_restart(tmp_path: Path) -> None:
+    database = tmp_path / "shared-goals.sqlite3"
+    created: dict[str, str] = {}
+    for restart in (False, True):
+        manager = PluginManager(PluginRegistry())
+        manager.start()
+        try:
+            manager.install_descriptor(BUNDLES[0])
+            for agent_id in ("alpha", "beta"):
+                scope = agent_instance_scope_id(agent_id)
+                manager.add_scope(scope, name=agent_id, parent_id=AGENT_SCOPE_ID)
+                manager.create_instance(
+                    BUNDLES[0].factory,
+                    BUNDLES[0].module,
+                    scope,
+                    properties={
+                        "plugin.goal.path": str(database),
+                        "plugin.agent_id": agent_id,
+                    },
+                )
+            alpha = manager.find_service(SPEC_GOAL, filter="(plugin.scope_id=agent:alpha)")
+            beta = manager.find_service(SPEC_GOAL, filter="(plugin.scope_id=agent:beta)")
+            assert alpha is not None and beta is not None
+            if not restart:
+                created["alpha"] = alpha.create_goal("alpha work", []).id
+                created["beta"] = beta.create_goal("beta work", []).id
+            assert alpha.current_goal().id == created["alpha"]
+            assert beta.current_goal().id == created["beta"]
+            assert alpha.get_goal(created["beta"]) is None
+            with pytest.raises(RuntimeError, match="unknown goal"):
+                beta.update_goal(
+                    created["alpha"], expected_revision=1, status="complete"
+                )
+        finally:
+            manager.stop()

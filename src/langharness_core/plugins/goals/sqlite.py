@@ -29,6 +29,7 @@ BLOCKER_THRESHOLD = 3
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS goals (
     id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL DEFAULT '',
     revision INTEGER NOT NULL,
     objective TEXT NOT NULL,
     acceptance_criteria TEXT NOT NULL,
@@ -81,6 +82,7 @@ def _row_to_goal(row: sqlite3.Row) -> Goal:
 @Property("_plugin_version", "plugin.version", "1.0.0")
 @Property("_path", "plugin.goal.path", "langharness_goals.sqlite3")
 @Property("_max_rounds", "plugin.goal.max_rounds", 32)
+@Property("_agent_id", "plugin.agent_id", "")
 class SQLiteGoalPlugin:
     """Persists goals and enforces the revision CAS that guards completion."""
 
@@ -89,6 +91,7 @@ class SQLiteGoalPlugin:
         self._plugin_version = "1.0.0"
         self._path = "langharness_goals.sqlite3"
         self._max_rounds = 32
+        self._agent_id = ""
         self._lock = threading.Lock()
         self._connection: sqlite3.Connection | None = None
 
@@ -113,12 +116,13 @@ class SQLiteGoalPlugin:
         with self._lock:
             connection = self._connection_or_open()
             connection.execute(
-                "INSERT INTO goals (id, revision, objective, acceptance_criteria,"
+                "INSERT INTO goals (id, agent_id, revision, objective, acceptance_criteria,"
                 " status, rounds_started, max_rounds, mutation_generation,"
                 " blocker_history, created_at, updated_at)"
-                " VALUES (?, 1, ?, ?, 'active', 0, ?, 0, '[]', ?, ?)",
+                " VALUES (?, ?, 1, ?, ?, 'active', 0, ?, 0, '[]', ?, ?)",
                 (
                     goal_id,
+                    self._agent_id,
                     objective,
                     json.dumps(criteria),
                     resolved_rounds,
@@ -141,9 +145,10 @@ class SQLiteGoalPlugin:
         with self._lock:
             connection = self._connection_or_open()
             cursor = connection.execute(
-                "SELECT * FROM goals WHERE status NOT IN"
+                "SELECT * FROM goals WHERE agent_id = ? AND status NOT IN"
                 " ('complete', 'blocked', 'cancelled')"
-                " ORDER BY rowid DESC LIMIT 1"
+                " ORDER BY rowid DESC LIMIT 1",
+                (self._agent_id,),
             )
             row = cursor.fetchone()
         return _row_to_goal(row) if row is not None else None
@@ -169,10 +174,11 @@ class SQLiteGoalPlugin:
             history = list(json.loads(row["blocker_history"]))
             if blocker is not None:
                 history.append(blocker)
-            connection.execute(
+            cursor = connection.execute(
                 "UPDATE goals SET revision = revision + 1, status = ?,"
                 " blocker_history = ?, rounds_started = rounds_started + ?,"
-                " mutation_generation = ?, updated_at = ? WHERE id = ?",
+                " mutation_generation = ?, updated_at = ?"
+                " WHERE id = ? AND agent_id = ? AND revision = ?",
                 (
                     status or row["status"],
                     json.dumps(history),
@@ -184,8 +190,13 @@ class SQLiteGoalPlugin:
                     ),
                     _now(),
                     goal_id,
+                    self._agent_id,
+                    expected_revision,
                 ),
             )
+            if cursor.rowcount != 1:
+                connection.rollback()
+                raise GoalConflictError(f"goal {goal_id!r} changed concurrently")
             connection.commit()
             updated = self._require(connection, goal_id)
         return _row_to_goal(updated)
@@ -218,9 +229,11 @@ class SQLiteGoalPlugin:
     def get_plugin_info(self) -> dict[str, str]:
         return {"name": self._plugin_name, "version": self._plugin_version}
 
-    @staticmethod
-    def _find(connection: sqlite3.Connection, goal_id: str) -> sqlite3.Row | None:
-        cursor = connection.execute("SELECT * FROM goals WHERE id = ?", (goal_id,))
+    def _find(self, connection: sqlite3.Connection, goal_id: str) -> sqlite3.Row | None:
+        cursor = connection.execute(
+            "SELECT * FROM goals WHERE id = ? AND agent_id = ?",
+            (goal_id, self._agent_id),
+        )
         row: sqlite3.Row | None = cursor.fetchone()
         return row
 
@@ -244,6 +257,18 @@ class SQLiteGoalPlugin:
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA journal_mode=WAL")
             connection.executescript(_SCHEMA)
+            columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(goals)").fetchall()
+            }
+            if "agent_id" not in columns:
+                connection.execute(
+                    "ALTER TABLE goals ADD COLUMN agent_id TEXT NOT NULL DEFAULT ''"
+                )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS goals_agent_status "
+                "ON goals (agent_id, status)"
+            )
             connection.commit()
             self._connection = connection
         return self._connection

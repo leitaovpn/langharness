@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -107,6 +108,37 @@ def test_state_survives_a_new_plugin_instance(tmp_path: Path) -> None:
     goal = plugin.create_goal("durable", [{"id": "c1", "text": "t"}])
     reopened = store(tmp_path)
     assert reopened.get_goal(goal.id) == goal
+
+
+def test_two_connections_cannot_overwrite_a_stale_revision(tmp_path: Path) -> None:
+    first = store(tmp_path)
+    second = store(tmp_path)
+    goal = first.create_goal("durable", [])
+    first.update_goal(goal.id, expected_revision=1, status="verifying")
+    with pytest.raises(GoalConflictError):
+        second.update_goal(goal.id, expected_revision=1, status="complete")
+    assert second.get_goal(goal.id).status == "verifying"
+
+
+def test_legacy_goal_table_migrates_without_assigning_an_agent(tmp_path: Path) -> None:
+    path = tmp_path / "goals.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE goals (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, "
+            "objective TEXT NOT NULL, acceptance_criteria TEXT NOT NULL, "
+            "status TEXT NOT NULL, rounds_started INTEGER NOT NULL DEFAULT 0, "
+            "max_rounds INTEGER NOT NULL DEFAULT 32, "
+            "mutation_generation INTEGER NOT NULL DEFAULT 0, "
+            "blocker_history TEXT NOT NULL DEFAULT '[]', "
+            "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO goals VALUES (?, 1, ?, '[]', 'active', 0, 32, 0, '[]', ?, ?)",
+            ("legacy", "old", "2026-09-24", "2026-09-24"),
+        )
+    plugin = store(tmp_path)
+    assert plugin.get_goal("legacy").objective == "old"
+    plugin._invalidate(None)
 
 
 def test_concurrent_updates_never_lose_a_revision(tmp_path: Path) -> None:
