@@ -29,6 +29,7 @@ from langharness_core.plugins.exec.runner import (
     MAX_OUTPUT_BYTES,
     READ_CHUNK,
     build_environment,
+    resource_limiter,
     terminate_process_group,
 )
 
@@ -90,6 +91,7 @@ class JobManagerPlugin:
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
                 env=build_environment(DEFAULT_ENV_ALLOWLIST),
+                preexec_fn=resource_limiter(self._default_timeout),
             )
             record = JobRecord(
                 id=job_id,

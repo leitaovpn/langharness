@@ -40,6 +40,9 @@
   - 单元测试验证无宿主 `/` 映射、工作目录/软链越界拒绝；当前开发机没有 `bwrap`，
     尚无真实 Linux bwrap 执行验证。非 Linux 平台显式拒绝 `bwrap`。资源限制、
     macOS 可用策略仍未完成。
+  - exec foreground/background 现在在 Linux 子进程设置 CPU（按 timeout）与地址空间
+    上限；macOS/Windows 保留已有 wall-clock、输出字节和 job 数上限。证据：
+    `tests/test_exec_runner.py`、`tests/test_job_manager.py` 定向 `39 passed`。
 - [ ] P3-C1 reviewer provider：可选 reviewer agent，只产生独立证据，不绕过 verify/finish
   的确定性门禁；缺少 provider 时明确 disabled。
 - [ ] P3-D1 web/skills/delivery：按 scope 可选装配，声明 schema、权限和 artifact；默认不启用。

@@ -9,17 +9,26 @@ filtered through an allowlist first.
 
 from __future__ import annotations
 
+import functools
 import os
 import signal
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
+
+try:
+    import resource
+except ImportError:  # pragma: no cover - Windows has no resource module
+    resource = None  # type: ignore[assignment]
 
 MAX_OUTPUT_BYTES = 65_536
 DEFAULT_TIMEOUT_SECONDS = 120.0
 KILL_GRACE_SECONDS = 3.0
+DEFAULT_MEMORY_LIMIT_BYTES = 512 * 1024 * 1024
 READ_CHUNK = 4096
 
 DEFAULT_ENV_ALLOWLIST: tuple[str, ...] = (
@@ -116,6 +125,25 @@ def terminate_process_group(process: subprocess.Popen[bytes]) -> None:
         return
 
 
+def _apply_resource_limits(*, cpu_seconds: int, memory_bytes: int) -> None:
+    """Apply bounded CPU and address-space limits in a child process."""
+    if resource is not None and hasattr(resource, "RLIMIT_CPU"):
+        resource.setrlimit(resource.RLIMIT_CPU, (max(1, cpu_seconds), max(1, cpu_seconds) + 1))
+    if resource is not None and hasattr(resource, "RLIMIT_AS"):
+        resource.setrlimit(resource.RLIMIT_AS, (max(1, memory_bytes), max(1, memory_bytes)))
+
+
+def resource_limiter(cpu_seconds: float, memory_bytes: int = DEFAULT_MEMORY_LIMIT_BYTES) -> Any:
+    """Return a POSIX pre-exec hook, or ``None`` on platforms without resource."""
+    if not sys.platform.startswith("linux") or resource is None:
+        return None
+    return functools.partial(
+        _apply_resource_limits,
+        cpu_seconds=max(1, int(cpu_seconds)),
+        memory_bytes=max(1, int(memory_bytes)),
+    )
+
+
 def run_command(
     command: Sequence[str],
     *,
@@ -137,6 +165,7 @@ def run_command(
             stderr=subprocess.STDOUT,
             start_new_session=True,
             env=None if env is None else dict(env),
+            preexec_fn=resource_limiter(timeout_seconds),
         )
     except OSError as exc:
         return CommandOutcome(
@@ -204,6 +233,3 @@ def _read_capped(
         terminate_process_group(process)
     reader.join(timeout=KILL_GRACE_SECONDS)
     return bytes(collected[:cap]), overflow.is_set(), timed_out
-
-
-
