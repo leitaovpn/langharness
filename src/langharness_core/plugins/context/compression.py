@@ -29,6 +29,42 @@ def _size(message: Any) -> int:
     return len(json.dumps(value, ensure_ascii=False, default=str).encode())
 
 
+def _field(message: Any, name: str) -> Any:
+    if isinstance(message, Mapping):
+        return message.get(name)
+    return getattr(message, name, None)
+
+
+def _tool_groups(source: list[Any]) -> list[list[int]]:
+    """Group an assistant call and all of its matching tool results atomically."""
+    parent = list(range(len(source)))
+
+    def root(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    owners: dict[str, int] = {}
+    for index, message in enumerate(source):
+        calls = _field(message, "tool_calls")
+        if not isinstance(calls, list):
+            continue
+        for call in calls:
+            call_id = _field(call, "id")
+            if isinstance(call_id, str) and call_id:
+                owners[call_id] = index
+    for index, message in enumerate(source):
+        call_id = _field(message, "tool_call_id")
+        if isinstance(call_id, str) and call_id in owners:
+            parent[root(index)] = root(owners[call_id])
+
+    groups: dict[int, list[int]] = {}
+    for index in range(len(source)):
+        groups.setdefault(root(index), []).append(index)
+    return list(groups.values())
+
+
 def compress_messages(
     messages: Iterable[Any], *, budget_bytes: int
 ) -> list[Any]:
@@ -36,23 +72,28 @@ def compress_messages(
     if budget_bytes < 1:
         raise ValueError("budget_bytes must be positive")
     source = list(messages)
+    groups = _tool_groups(source)
     marked = [
-        index
-        for index, message in enumerate(source)
-        if any(marker in _content(message).lower() for marker in PRESERVED_MARKERS)
+        group
+        for group in groups
+        if any(
+            marker in _content(source[index]).lower()
+            for index in group
+            for marker in PRESERVED_MARKERS
+        )
     ]
     selected: set[int] = set()
     used = 0
-    required_bytes = sum(_size(source[index]) for index in marked)
+    required_bytes = sum(_size(source[index]) for group in marked for index in group)
     if required_bytes > budget_bytes:
         raise ValueError("control evidence exceeds context budget")
-    for index in [*marked, *reversed(range(len(source)))]:
-        if index in selected:
+    for group in [*marked, *sorted(groups, key=lambda item: item[-1], reverse=True)]:
+        if group[0] in selected:
             continue
-        size = _size(source[index])
+        size = sum(_size(source[index]) for index in group)
         if used + size > budget_bytes:
             continue
-        selected.add(index)
+        selected.update(group)
         used += size
     return [source[index] for index in sorted(selected)]
 

@@ -65,7 +65,10 @@
   - 已验证 LangGraph `add_messages` reducer：单纯返回压缩后的子集不会删除旧消息；
     middleware 现在在确需压缩时先发 `RemoveMessage(id=REMOVE_ALL_MESSAGES)` 再写入保留
     消息。见 `test_context_middleware_replaces_checkpoint_history`。
-  - 待完成：token 预算、结构化控制证据识别、工具调用与结果消息的成对保留，以及更广泛的
+  - 已按 `tool_call_id` 将 AI 调用与全部匹配的工具结果作为不可拆分的组，预算不足时整体
+    跳过；控制证据所在组预算不足时拒绝压缩。`tests/test_context_compression.py` 覆盖真实
+    LangChain 消息和多调用字典消息。
+  - 待完成：token 预算、结构化控制证据识别、缺失调用/结果的异常历史策略，以及更广泛的
     checkpoint/stream 语义验证；现有测试仅证明上述单线程 round-trip 场景。
 - [ ] P3-E3 cross-process goal resume：从 SQLite checkpoint 恢复 agent/session/goal 状态，
   防止重复完成和 revision 回退。

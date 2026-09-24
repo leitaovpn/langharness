@@ -1,8 +1,10 @@
 """Tests for deterministic bounded context compression."""
 
+import json
 from typing import Any, cast
 
 import pytest
+from langchain_core.messages import AIMessage, ToolMessage
 
 from langharness_core.plugins.context.compression import (
     ContextCompressionTransformer,
@@ -44,6 +46,53 @@ def test_compression_keeps_original_order_when_budget_allows() -> None:
         {"role": "assistant", "content": "next"},
     ]
     assert compress_messages(messages, budget_bytes=1000) == messages
+
+
+def test_compression_does_not_keep_tool_result_without_its_call() -> None:
+    call = AIMessage(
+        content="",
+        tool_calls=[{"name": "lookup", "args": {"query": "x" * 100}, "id": "call-1"}],
+    )
+    result = ToolMessage(content="ok", tool_call_id="call-1")
+    result_size = len(json.dumps(result.model_dump(), ensure_ascii=False).encode())
+
+    assert compress_messages([call, result], budget_bytes=result_size) == []
+
+
+def test_marked_tool_result_requires_room_for_its_call() -> None:
+    call = AIMessage(
+        content="",
+        tool_calls=[{"name": "verify", "args": {"path": "x" * 100}, "id": "call-1"}],
+    )
+    result = ToolMessage(content="verification: passed", tool_call_id="call-1")
+    result_size = len(json.dumps(result.model_dump(), ensure_ascii=False).encode())
+
+    with pytest.raises(ValueError, match="control evidence"):
+        compress_messages([call, result], budget_bytes=result_size)
+
+
+def test_multiple_results_from_one_call_are_preserved_together() -> None:
+    call = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {"id": "call-1", "name": "first"},
+            {"id": "call-2", "name": "second"},
+        ],
+    }
+    first = {"role": "tool", "content": "first result", "tool_call_id": "call-1"}
+    second = {"role": "tool", "content": "second result", "tool_call_id": "call-2"}
+    full_size = sum(
+        len(json.dumps(message, ensure_ascii=False).encode())
+        for message in (call, first, second)
+    )
+
+    assert compress_messages([call, first, second], budget_bytes=full_size) == [
+        call,
+        first,
+        second,
+    ]
+    assert compress_messages([call, first, second], budget_bytes=full_size - 1) == []
 
 
 def test_transformer_round_trips_checkpoint_like_state() -> None:
