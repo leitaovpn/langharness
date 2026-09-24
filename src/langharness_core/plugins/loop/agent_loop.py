@@ -81,6 +81,9 @@ LOGGER = logging.getLogger("langharness.agent")
 PTC_AUDIT_EVENTS: ContextVar[list[dict[str, Any]] | None] = ContextVar(
     "ptc_audit_events", default=None
 )
+PTC_AUDIT_SESSION: ContextVar[str | None] = ContextVar(
+    "ptc_audit_session", default=None
+)
 
 
 def _extract_usage(message: Any) -> dict[str, int] | None:
@@ -747,7 +750,9 @@ class PluginAgentLoop:
         if collector is not None:
             collector.extend(audit)
         elif self._audit_provider is not None and audit:
-            await self._audit_provider.append_events(audit)
+            await self._audit_provider.append_events(
+                [self._scope_audit(event, PTC_AUDIT_SESSION.get()) for event in audit]
+            )
         return result
 
     def _collect_native_tools(self) -> list[Any]:
@@ -960,9 +965,13 @@ class PluginAgentLoop:
         if self._graph is None:
             raise RuntimeError("Agent graph is not built; no LLM plugin is available")
         config = {"configurable": {"thread_id": thread_id}} if thread_id else None
-        return self._graph.invoke(
-            {"messages": [{"role": "user", "content": message}]}, config=config
-        )
+        token = PTC_AUDIT_SESSION.set(thread_id)
+        try:
+            return self._graph.invoke(
+                {"messages": [{"role": "user", "content": message}]}, config=config
+            )
+        finally:
+            PTC_AUDIT_SESSION.reset(token)
 
     async def _forward_stream(
         self,

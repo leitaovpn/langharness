@@ -35,8 +35,11 @@
     正常结束后写入 applied，且不保存 resume 参数。测试覆盖审计库重开后关联、超出普通
     session 查询分页的未决请求，以及 agent 隔离。`decision_applied` 只表示图流处理完毕，
     不表示被审批工具一定执行成功。
-  - 待完成：同步 `_run_code` 路径的会话元数据，真实跨进程 agent/checkpoint 恢复时的
-    审计事件关联验证，以及崩溃后的决策提交重试/幂等语义。
+  - 新增：同步 `invoke(thread_id=...)` 路径的 `_run_code` 审计记录 agent/session，
+    `tests/test_audit_persistence.py::test_sync_invoke_scopes_ptc_audit_to_agent_and_session`
+    使用真实 Node PTC 执行与 SQLite 查询验证。
+  - 待完成：真实跨进程 agent/checkpoint 恢复时的审计事件关联验证，以及崩溃后的决策
+    提交重试/幂等语义。
 - [ ] P3-A3 sandbox policy：workspace 读写范围、网络默认拒绝、环境白名单、资源限制和
   symlink 防逃逸；为 macOS `sandbox-exec` 与 Linux `bwrap` 分别测试。
   - Linux `bwrap` argv 已改为仅映射系统运行时目录、指定 workspace 与可信只读文件；
@@ -98,6 +101,9 @@
     当前 chat 与 anthropic 均在模型调用阶段返回 HTTP 403（免费额度耗尽），responses
     返回 `ValueError: No generations found in stream`，均未进入 `run_code`，本轮无成功
     artifact/checkpoint。此前 2026-09-23 两协议成功记录不能替代当前三协议验收。
+  - 2026-09-25 复测：三个协议仍未进入 `run_code`。chat/anthropic 在模型调用阶段返回
+    HTTP 403（额度耗尽）；responses 返回空流。脱敏失败摘要和 NDJSON 保存在
+    `docs/evidence/ptc/2026-09-25/`，这些是失败诊断而非成功验收证据。
 - [ ] P3-F2 final gate：P3 全部完成后运行 `make check`，覆盖率至少 95%，并完成真实 provider
   smoke 报告。
   - 当前中途门禁：2026-09-24 `make check` 通过；Ruff、mypy、Pyright、clean-process

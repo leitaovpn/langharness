@@ -295,3 +295,29 @@ def test_audit_survives_store_reopen_and_sync_agent_path(tmp_path: Path) -> None
     second._invalidate(cast(Any, None))
     assert [event["status"] for event in events] == ["started", "completed"]
     assert events[1]["result"] == 5
+
+
+def test_sync_invoke_scopes_ptc_audit_to_agent_and_session(tmp_path: Path) -> None:
+    plugin = SQLiteAuditPlugin()
+    plugin._path = str(tmp_path / "audit.sqlite3")
+    loop = PluginAgentLoop()
+    loop._agent_id = "alpha"
+    loop._ptc_runtime = NodePTCRuntime()
+    loop._tool_providers = [ToolPlugin()]
+    loop._audit_provider = plugin
+
+    class DirectGraph:
+        def invoke(self, input_data: Any, config: Any = None) -> Any:
+            return asyncio.run(loop._run_code("return await tools.add({a: 2, b: 3});"))
+
+    loop._graph = DirectGraph()
+    assert loop.invoke("add", thread_id="session-1")["result"] == 5
+
+    async def stored() -> list[dict[str, Any]]:
+        return await plugin.list_session_events("alpha", "session-1")
+
+    events = asyncio.run(stored())
+    plugin._invalidate(cast(Any, None))
+    assert [event["status"] for event in events] == ["started", "completed"]
+    assert all(event["agent_id"] == "alpha" for event in events)
+    assert all(event["session_id"] == "session-1" for event in events)
