@@ -54,6 +54,8 @@
   - 证据：`tests/test_goal_scope.py::test_shared_goal_database_is_scoped_after_framework_restart`、
     `tests/test_goal_store.py` 的双连接冲突与旧表迁移测试。尚缺 agent/session/checkpoint
     联合恢复及完成状态幂等的端到端证据。
+  - 已加终态不可重开与 mutation generation 不回退约束；重启后的已完成 goal 不会
+    重新成为 active，见 `tests/test_goal_store.py`。尚未完成 checkpoint 联合恢复。
 - [ ] P3-F1 real provider smoke：设置 `LANG_HARNESS_REAL_LLM_PROVIDER`、密钥和 protocol，
   对 chat/anthropic/responses 各执行一轮；保存原始 NDJSON、artifact、checkpoint 摘要。
   - `tests/test_ptc_real_provider.py` 使用本地 provider 配置运行真实 PTC `run_code` 调用，
@@ -70,7 +72,7 @@
 - [ ] P3-F2 final gate：P3 全部完成后运行 `make check`，覆盖率至少 95%，并完成真实 provider
   smoke 报告。
   - 当前中途门禁：2026-09-24 `make check` 通过；Ruff、mypy、Pyright、clean-process
-    import、`1373 passed, 3 skipped`，总覆盖率 `95.46%`。3 个跳过项包括尚未纳入
+    import、`1375 passed, 3 skipped`，总覆盖率 `95.45%`。3 个跳过项包括尚未纳入
     默认门禁的真实模型 smoke；这不是 Phase 3 最终验收。
 
 ## 当前环境证据

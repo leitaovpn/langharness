@@ -67,6 +67,20 @@ def test_completing_a_goal_removes_it_from_current(tmp_path: Path) -> None:
     assert plugin.get_goal(goal.id).status == "complete"
 
 
+def test_completed_goal_cannot_be_reopened_after_restart(tmp_path: Path) -> None:
+    first = store(tmp_path)
+    goal = first.create_goal("only", [])
+    completed = first.update_goal(goal.id, expected_revision=1, status="complete")
+    first._invalidate(None)
+    reopened = store(tmp_path)
+    assert reopened.current_goal() is None
+    with pytest.raises(GoalConflictError, match="terminal"):
+        reopened.update_goal(
+            goal.id, expected_revision=completed.revision, status="active"
+        )
+    assert reopened.get_goal(goal.id) == completed
+
+
 def test_a_stale_revision_is_refused(tmp_path: Path) -> None:
     plugin = store(tmp_path)
     goal = plugin.create_goal("o", [])
@@ -81,6 +95,19 @@ def test_each_update_advances_the_revision(tmp_path: Path) -> None:
     second = plugin.update_goal(goal.id, expected_revision=1, status="verifying")
     third = plugin.update_goal(goal.id, expected_revision=2, status="active")
     assert (second.revision, third.revision) == (2, 3)
+
+
+def test_mutation_generation_cannot_roll_back(tmp_path: Path) -> None:
+    plugin = store(tmp_path)
+    goal = plugin.create_goal("o", [])
+    updated = plugin.update_goal(
+        goal.id, expected_revision=1, mutation_generation=4
+    )
+    with pytest.raises(GoalConflictError, match="generation"):
+        plugin.update_goal(
+            goal.id, expected_revision=updated.revision, mutation_generation=3
+        )
+    assert plugin.get_goal(goal.id) == updated
 
 
 def test_rounds_can_be_incremented(tmp_path: Path) -> None:

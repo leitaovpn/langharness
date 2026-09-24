@@ -171,6 +171,15 @@ class SQLiteGoalPlugin:
                     f"goal {goal_id!r} is at revision {row['revision']}, "
                     f"not {expected_revision}"
                 )
+            if row["status"] in ("complete", "blocked", "cancelled"):
+                raise GoalConflictError(f"goal {goal_id!r} is terminal")
+            if (
+                mutation_generation is not None
+                and mutation_generation < row["mutation_generation"]
+            ):
+                raise GoalConflictError(
+                    f"goal {goal_id!r} mutation generation cannot roll back"
+                )
             history = list(json.loads(row["blocker_history"]))
             if blocker is not None:
                 history.append(blocker)
@@ -178,7 +187,8 @@ class SQLiteGoalPlugin:
                 "UPDATE goals SET revision = revision + 1, status = ?,"
                 " blocker_history = ?, rounds_started = rounds_started + ?,"
                 " mutation_generation = ?, updated_at = ?"
-                " WHERE id = ? AND agent_id = ? AND revision = ?",
+                " WHERE id = ? AND agent_id = ? AND revision = ?"
+                " AND status NOT IN ('complete', 'blocked', 'cancelled')",
                 (
                     status or row["status"],
                     json.dumps(history),
