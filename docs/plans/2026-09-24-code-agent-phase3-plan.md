@@ -91,7 +91,7 @@
 - [ ] P3-F2 final gate：P3 全部完成后运行 `make check`，覆盖率至少 95%，并完成真实 provider
   smoke 报告。
   - 当前中途门禁：2026-09-24 `make check` 通过；Ruff、mypy、Pyright、clean-process
-    import、`1378 passed, 3 skipped`，总覆盖率 `95.38%`。3 个跳过项包括尚未纳入
+    import、`1385 passed, 3 skipped`，总覆盖率 `95.36%`。3 个跳过项包括尚未纳入
     默认门禁的真实模型 smoke；这不是 Phase 3 最终验收。
 
 ## 当前环境证据
