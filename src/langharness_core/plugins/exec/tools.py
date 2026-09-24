@@ -207,7 +207,10 @@ class ExecToolsPlugin:
             argv = [str(part) for part in command]
             isolation = "process-only"
             if plugin._sandbox is not None:
-                argv = plugin._sandbox.wrap_command(argv, str(target.absolute))
+                argv = plugin._sandbox.wrap_command(
+                    argv, str(target.absolute),
+                    workspace_root=plugin._workspace.get_workspace(),
+                )
                 isolation = str(plugin._sandbox.get_isolation())
             if background:
                 try:

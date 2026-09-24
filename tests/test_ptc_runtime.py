@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -122,8 +123,17 @@ async def test_runtime_reports_bound_sandbox_isolation() -> None:
         def get_isolation(self) -> str:
             return "os-sandbox"
 
-        def wrap_command(self, argv: list[str], cwd: str) -> list[str]:
-            assert argv[0] == "node"
+        def wrap_command(
+            self,
+            argv: list[str],
+            cwd: str,
+            workspace_root: str | None = None,
+            read_only_paths: list[str] | None = None,
+        ) -> list[str]:
+            assert Path(argv[0]).is_file()
+            assert read_only_paths is not None
+            assert argv[0] in read_only_paths
+            assert argv[-1] in read_only_paths
             return [*argv]
 
     runtime = NodePTCRuntime()

@@ -442,7 +442,13 @@ class SandboxProvider(Protocol):
 
     def get_isolation(self) -> Literal["os-sandbox", "process-only"]: ...
 
-    def wrap_command(self, argv: list[str], cwd: str) -> list[str]: ...
+    def wrap_command(
+        self,
+        argv: list[str],
+        cwd: str,
+        workspace_root: str | None = None,
+        read_only_paths: list[str] | None = None,
+    ) -> list[str]: ...
 
     def get_plugin_info(self) -> dict[str, str]: ...
 

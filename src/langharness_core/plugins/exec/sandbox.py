@@ -37,25 +37,65 @@ class OSSandboxPlugin:
     def get_isolation(self) -> Literal["os-sandbox", "process-only"]:
         return "os-sandbox" if self._validated_backend() else "process-only"
 
-    def wrap_command(self, argv: list[str], cwd: str) -> list[str]:
+    def wrap_command(
+        self,
+        argv: list[str],
+        cwd: str,
+        workspace_root: str | None = None,
+        read_only_paths: list[str] | None = None,
+    ) -> list[str]:
         backend = self._validated_backend()
         if backend is None:
             return list(argv)
-        return [
+        workspace = Path(workspace_root or cwd).resolve(strict=True)
+        working_dir = Path(cwd).resolve(strict=True)
+        if not workspace.is_dir() or not working_dir.is_dir():
+            raise RuntimeError("Sandbox workspace and cwd must be directories")
+        if workspace == Path("/") or not working_dir.is_relative_to(workspace):
+            raise RuntimeError("Sandbox cwd must remain inside a non-root workspace")
+        system_roots = [
+            root for root in (Path("/usr"), Path("/bin"), Path("/lib"), Path("/lib64"))
+            if root.exists()
+        ]
+        if any(workspace.is_relative_to(root) for root in system_roots):
+            raise RuntimeError("Sandbox workspace overlaps a system mount")
+        wrapped = [
             backend,
             "--die-with-parent",
             "--unshare-net",
-            "--ro-bind",
-            "/",
-            "/",
-            "--bind",
-            cwd,
-            cwd,
-            "--chdir",
-            cwd,
-            "--",
-            *argv,
+            "--unshare-pid",
+            "--unshare-ipc",
+            "--new-session",
+            "--clearenv",
+            "--setenv", "PATH", "/usr/bin:/bin",
+            "--setenv", "HOME", "/nonexistent",
+            "--setenv", "TMPDIR", "/tmp",
+            "--tmpfs", "/tmp",
+            "--dev", "/dev",
+            "--proc", "/proc",
         ]
+        for root in system_roots:
+            wrapped.extend(("--ro-bind", str(root), str(root)))
+        for parent in reversed(workspace.parents):
+            if parent != Path("/"):
+                wrapped.extend(("--dir", str(parent)))
+        for raw in read_only_paths or []:
+            path = Path(raw).resolve(strict=True)
+            if not path.is_file():
+                raise RuntimeError("Sandbox read-only mount must be a file")
+            if path.is_relative_to(workspace) or any(
+                path.is_relative_to(root) for root in system_roots
+            ):
+                continue
+            for parent in reversed(path.parents):
+                if parent != Path("/"):
+                    wrapped.extend(("--dir", str(parent)))
+            wrapped.extend(("--ro-bind", str(path), str(path)))
+        wrapped.extend((
+            "--bind", str(workspace), str(workspace),
+            "--chdir", str(working_dir), "--", *argv,
+        ))
+        return wrapped
 
     def get_plugin_info(self) -> dict[str, str]:
         return {

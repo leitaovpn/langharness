@@ -34,6 +34,11 @@
     审计事件关联验证。
 - [ ] P3-A3 sandbox policy：workspace 读写范围、网络默认拒绝、环境白名单、资源限制和
   symlink 防逃逸；为 macOS `sandbox-exec` 与 Linux `bwrap` 分别测试。
+  - Linux `bwrap` argv 已改为仅映射系统运行时目录、指定 workspace 与可信只读文件；
+    使用独立 PID/IPC/网络命名空间、清空环境并设置最小 PATH/HOME/TMPDIR。
+    exec 传入 workspace 根目录，PTC 显式挂载 Node 可执行文件和 bootstrap 脚本。
+  - 单元测试验证无宿主 `/` 映射、工作目录/软链越界拒绝；当前开发机没有 `bwrap`，
+    尚无真实 Linux bwrap 执行验证。资源限制、macOS 可用策略仍未完成。
 - [ ] P3-C1 reviewer provider：可选 reviewer agent，只产生独立证据，不绕过 verify/finish
   的确定性门禁；缺少 provider 时明确 disabled。
 - [ ] P3-D1 web/skills/delivery：按 scope 可选装配，声明 schema、权限和 artifact；默认不启用。
@@ -53,7 +58,7 @@
 - [ ] P3-F2 final gate：P3 全部完成后运行 `make check`，覆盖率至少 95%，并完成真实 provider
   smoke 报告。
   - 当前中途门禁：2026-09-24 `make check` 通过；Ruff、mypy、Pyright、clean-process
-    import、`1365 passed, 3 skipped`，总覆盖率 `95.50%`。3 个跳过项包括尚未纳入
+    import、`1367 passed, 3 skipped`，总覆盖率 `95.47%`。3 个跳过项包括尚未纳入
     默认门禁的真实模型 smoke；这不是 Phase 3 最终验收。
 
 ## 当前环境证据

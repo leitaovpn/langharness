@@ -6,11 +6,13 @@ import asyncio
 import inspect
 import json
 import os
+import shutil
 import signal
 import time
 import uuid
 from collections.abc import Callable, Mapping
 from importlib.resources import files
+from pathlib import Path
 from typing import Any
 
 from pelix.ipopo.decorators import ComponentFactory, Property, Provides, RequiresBest
@@ -68,7 +70,16 @@ class NodePTCRuntime:
         command = ["node", "--experimental-strip-types", bootstrap]
         isolation = "process-only"
         if self._sandbox is not None:
-            command = self._sandbox.wrap_command(command, os.getcwd())
+            node = shutil.which("node")
+            if node is None:
+                raise RuntimeError("Node executable is unavailable for PTC sandbox")
+            command[0] = str(Path(node).resolve(strict=True))
+            command[-1] = str(Path(bootstrap).resolve(strict=True))
+            command = self._sandbox.wrap_command(
+                command,
+                os.getcwd(),
+                read_only_paths=[command[0], command[-1]],
+            )
             isolation = str(self._sandbox.get_isolation())
         process = await asyncio.create_subprocess_exec(
             *command,

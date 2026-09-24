@@ -57,7 +57,13 @@ def test_exec_command_uses_bound_sandbox_and_reports_isolation(tmp_path: Path) -
         def get_isolation(self) -> str:
             return "os-sandbox"
 
-        def wrap_command(self, argv: list[str], cwd: str) -> list[str]:
+        def wrap_command(
+            self,
+            argv: list[str],
+            cwd: str,
+            workspace_root: str | None = None,
+            read_only_paths: list[str] | None = None,
+        ) -> list[str]:
             return [*argv]
 
     instance._sandbox = Sandbox()
