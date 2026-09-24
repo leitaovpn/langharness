@@ -53,6 +53,10 @@
 - [ ] P3-E1 failure recovery：跨进程 job/Node 子进程恢复、重试边界、幂等 call id 和取消排空。
 - [ ] P3-E2 context compression：按 token/字节预算压缩历史，保留目标、验证报告、审计引用
   和未完成审批；增加 checkpoint round-trip 测试。
+  - 已新增纯函数 `compress_messages`：按字节预算保留最新消息，并优先保留 goal、
+    verification、audit、approval、unfinished 标记的控制证据；输入预算非法时拒绝。
+  - 证据：`tests/test_context_compression.py`。尚未把压缩器接入 LangGraph checkpoint
+    transformer，也未完成 checkpoint round-trip 集成验证。
 - [ ] P3-E3 cross-process goal resume：从 SQLite checkpoint 恢复 agent/session/goal 状态，
   防止重复完成和 revision 回退。
   - 已补 goal SQLite 的 `agent_id` 隔离和数据库级 revision CAS；同一数据库内两个
