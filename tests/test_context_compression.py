@@ -32,6 +32,14 @@ def test_compression_rejects_invalid_budget() -> None:
         compress_messages([], budget_bytes=0)
 
 
+def test_compression_keeps_original_order_when_budget_allows() -> None:
+    messages = [
+        {"role": "user", "content": "goal: build"},
+        {"role": "assistant", "content": "next"},
+    ]
+    assert compress_messages(messages, budget_bytes=1000) == messages
+
+
 def test_transformer_round_trips_checkpoint_like_state() -> None:
     transformer = ContextCompressionTransformer(500)
     state = {

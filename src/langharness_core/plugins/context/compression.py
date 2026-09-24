@@ -27,25 +27,25 @@ def compress_messages(
         raise ValueError("budget_bytes must be positive")
     source = [dict(message) for message in messages]
     marked = [
-        message
-        for message in source
+        index
+        for index, message in enumerate(source)
         if any(marker in str(message.get("content", "")).lower() for marker in PRESERVED_MARKERS)
     ]
-    result: list[dict[str, Any]] = []
+    selected: set[int] = set()
     used = 0
-    for message in [*marked, *reversed(source)]:
-        if message in result:
+    for index in [*marked, *reversed(range(len(source)))]:
+        if index in selected:
             continue
-        size = _size(message)
+        size = _size(source[index])
         if used + size > budget_bytes:
             continue
-        result.append(message)
+        selected.add(index)
         used += size
-    return list(reversed(result))
+    return [source[index] for index in sorted(selected)]
 
 
 class ContextCompressionTransformer:
-    """State transformer suitable for a LangGraph transformer provider."""
+    """Pure state projection; not a LangGraph stream transformer factory."""
 
     def __init__(self, budget_bytes: int) -> None:
         if budget_bytes < 1:

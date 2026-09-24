@@ -53,13 +53,15 @@
 - [ ] P3-E1 failure recovery：跨进程 job/Node 子进程恢复、重试边界、幂等 call id 和取消排空。
 - [ ] P3-E2 context compression：按 token/字节预算压缩历史，保留目标、验证报告、审计引用
   和未完成审批；增加 checkpoint round-trip 测试。
-  - 已新增纯函数 `compress_messages` 和可作为 transformer 使用的
+  - 已新增纯函数 `compress_messages` 和纯状态投影
     `ContextCompressionTransformer`：按字节预算保留最新消息，并优先保留 goal、
     verification、audit、approval、unfinished 标记的控制证据；输入预算非法时拒绝。
   - 证据：`tests/test_context_compression.py`。尚未把压缩器接入 LangGraph checkpoint
     transformer，也未完成 checkpoint round-trip 集成验证。
-  - 已补 `context-compression` agent plugin catalog 项；默认不注入 transformer，只有
-    `plugin.context.budget_bytes > 0` 才装配。证据：`tests/test_context_transformer_plugin.py`。
+  - 原拟通过 `create_agent(transformers=...)` 装配，但本地 LangChain 实际要求
+    `TransformerFactory(scope) -> StreamTransformer`，这是流事件转换，不是 checkpoint
+    或消息转换。因此撤销该错误的 agent plugin 装配；需改走 middleware/checkpointer
+    路径并完成真实 round-trip 验收。现有纯函数不得视为 E2 已完成。
 - [ ] P3-E3 cross-process goal resume：从 SQLite checkpoint 恢复 agent/session/goal 状态，
   防止重复完成和 revision 回退。
   - 已补 goal SQLite 的 `agent_id` 隔离和数据库级 revision CAS；同一数据库内两个
