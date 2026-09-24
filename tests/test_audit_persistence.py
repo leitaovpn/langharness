@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
+
+from langchain_core.messages import AIMessage, ToolMessage
 
 from langharness_core.plugins.loop.agent_loop import PluginAgentLoop
 from langharness_core.plugins.presentation.runtime import NodePTCRuntime
@@ -98,6 +101,90 @@ def test_existing_audit_database_is_migrated(tmp_path: Path) -> None:
         [{"root_call_id": "old-root"}],
         [{"root_call_id": "new-root", "agent_id": "a", "session_id": "s"}],
     )
+    plugin._invalidate(cast(Any, None))
+
+
+def test_exec_call_and_result_are_persisted_without_command_output(tmp_path: Path) -> None:
+    plugin = SQLiteAuditPlugin()
+    plugin._path = str(tmp_path / "audit.sqlite3")
+    loop = PluginAgentLoop()
+    loop._audit_provider = plugin
+    loop._agent_id = "alpha"
+    call = AIMessage(
+        content="",
+        tool_calls=[{"name": "exec_command", "args": {"command": ["echo", "secret"]}, "id": "call-1"}],
+    )
+    result = ToolMessage(content="secret", name="exec_command", tool_call_id="call-1")
+
+    async def stream() -> Any:
+        yield "updates", {"model": {"messages": [call]}}
+        yield "updates", {"tools": {"messages": [result]}}
+
+    async def scenario() -> list[dict[str, Any]]:
+        async for _ in loop._forward_stream(stream(), {}, {}, session_id="session-1"):
+            pass
+        return await plugin.list_events("call-1")
+
+    events = asyncio.run(scenario())
+    assert [event["status"] for event in events] == ["started", "completed"]
+    assert all(event["agent_id"] == "alpha" for event in events)
+    assert all(event["session_id"] == "session-1" for event in events)
+    assert all("secret" not in str(event) for event in events)
+    plugin._invalidate(cast(Any, None))
+
+
+def test_job_lifecycle_is_persisted_without_output(tmp_path: Path) -> None:
+    plugin = SQLiteAuditPlugin()
+    plugin._path = str(tmp_path / "audit.sqlite3")
+    loop = PluginAgentLoop()
+    loop._audit_provider = plugin
+    loop._agent_id = "alpha"
+
+    class Jobs:
+        def drain_events(self) -> list[dict[str, Any]]:
+            return [
+                {"type": "job_started", "job_id": "job-1", "command": ["echo", "secret"]},
+                {"type": "job_output", "job_id": "job-1", "text": "secret"},
+                {"type": "job_finished", "job_id": "job-1", "state": "exited", "exit_code": 0},
+            ]
+
+    loop._job_manager = Jobs()
+
+    async def stream() -> Any:
+        yield "updates", {}
+
+    async def scenario() -> list[dict[str, Any]]:
+        async for _ in loop._forward_stream(stream(), {}, {}, session_id="session-1"):
+            pass
+        return await plugin.list_events("job-1")
+
+    events = asyncio.run(scenario())
+    assert [event["status"] for event in events] == ["started", "exited"]
+    assert all("secret" not in str(event) for event in events)
+    plugin._invalidate(cast(Any, None))
+
+
+def test_approval_request_is_persisted_without_action_arguments(tmp_path: Path) -> None:
+    plugin = SQLiteAuditPlugin()
+    plugin._path = str(tmp_path / "audit.sqlite3")
+    loop = PluginAgentLoop()
+    loop._audit_provider = plugin
+    loop._agent_id = "alpha"
+    request = {"action_requests": [{"name": "exec_command", "args": {"secret": "hidden"}}]}
+
+    async def stream() -> Any:
+        yield "updates", {"__interrupt__": (SimpleNamespace(value=request),)}
+
+    async def scenario() -> list[dict[str, Any]]:
+        async for _ in loop._forward_stream(stream(), {}, {}, session_id="session-1"):
+            pass
+        return await plugin.list_session_events("alpha", "session-1")
+
+    events = asyncio.run(scenario())
+    assert len(events) == 1
+    assert events[0]["type"] == "approval_audit"
+    assert events[0]["status"] == "required"
+    assert "hidden" not in str(events[0])
     plugin._invalidate(cast(Any, None))
 
 

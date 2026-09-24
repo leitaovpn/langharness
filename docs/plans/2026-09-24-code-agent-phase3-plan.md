@@ -27,7 +27,11 @@
     事件标记 agent/session 并支持按两者查询，旧版 SQLite 表自动迁移。
   - 证据：`tests/test_audit_persistence.py` round-trip、reopen、scope 查询、旧库迁移；
     与 PTC runtime/code-agent e2e 定向执行 `28 passed, 1 skipped`。
-  - 待完成：exec/job/approval 事件；同步 `_run_code` 路径仍缺会话元数据。
+  - 新增：stream 将 exec 工具开始/结束、后台 job 开始/结束与审批请求写入审计库，
+    只保存元数据，不保存命令参数、输出或审批参数；对应测试见
+    `tests/test_audit_persistence.py`。
+  - 待完成：审批决策结果、同步 `_run_code` 路径的会话元数据，以及跨进程恢复时的
+    审计事件关联验证。
 - [ ] P3-A3 sandbox policy：workspace 读写范围、网络默认拒绝、环境白名单、资源限制和
   symlink 防逃逸；为 macOS `sandbox-exec` 与 Linux `bwrap` 分别测试。
 - [ ] P3-C1 reviewer provider：可选 reviewer agent，只产生独立证据，不绕过 verify/finish
@@ -49,7 +53,7 @@
 - [ ] P3-F2 final gate：P3 全部完成后运行 `make check`，覆盖率至少 95%，并完成真实 provider
   smoke 报告。
   - 当前中途门禁：2026-09-24 `make check` 通过；Ruff、mypy、Pyright、clean-process
-    import、`1362 passed, 3 skipped`，总覆盖率 `95.49%`。3 个跳过项包括尚未纳入
+    import、`1365 passed, 3 skipped`，总覆盖率 `95.50%`。3 个跳过项包括尚未纳入
     默认门禁的真实模型 smoke；这不是 Phase 3 最终验收。
 
 ## 当前环境证据

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -985,6 +986,7 @@ class PluginAgentLoop:
                         await self._audit_provider.append_events([audit])
                     yield audit
             for job_event in self._drain_job_events():
+                await self._persist_job_audit(job_event, session_id)
                 yield job_event
             if stream_type == "messages":
                 streamed_message = chunk[0]
@@ -1018,15 +1020,23 @@ class PluginAgentLoop:
             # node name ({"tools": {"__interrupt__": (...), "messages": [...]}}).
             # The interrupt container is a tuple, never a node-update dict.
             for interrupt in _iter_interrupts(chunk):
+                await self._persist_approval_audit(session_id)
                 yield {"type": "approval_required", "request": interrupt}
             for update in chunk.values():
                 if not isinstance(update, dict):
                     continue
                 for interrupt in _iter_interrupts(update):
+                    await self._persist_approval_audit(session_id)
                     yield {"type": "approval_required", "request": interrupt}
                 for updated_message in update.get("messages", []):
                     _strip_orphan_tool_use(updated_message)
                     if isinstance(updated_message, ToolMessage):
+                        await self._persist_tool_audit(
+                            name=updated_message.name or "",
+                            call_id=updated_message.tool_call_id,
+                            status="completed",
+                            session_id=session_id,
+                        )
                         yield {
                             "type": "tool_output",
                             "name": updated_message.name or "tool",
@@ -1034,6 +1044,12 @@ class PluginAgentLoop:
                             "output": str(updated_message.content),
                         }
                     for tool_call in getattr(updated_message, "tool_calls", []):
+                        await self._persist_tool_audit(
+                            name=tool_call["name"],
+                            call_id=tool_call["id"],
+                            status="started",
+                            session_id=session_id,
+                        )
                         yield {
                             "type": "tool_call",
                             "name": tool_call["name"],
@@ -1052,6 +1068,69 @@ class PluginAgentLoop:
         self, audit: dict[str, Any], session_id: str | None
     ) -> dict[str, Any]:
         return {**audit, "agent_id": self._agent_id, "session_id": session_id or ""}
+
+    async def _persist_tool_audit(
+        self, *, name: str, call_id: str, status: str, session_id: str | None
+    ) -> None:
+        if self._audit_provider is None or name not in {
+            "exec_command", "wait_job", "write_stdin", "stop_job"
+        } or not call_id:
+            return
+        await self._audit_provider.append_events(
+            [
+                self._scope_audit(
+                    {
+                        "type": "tool_audit",
+                        "root_call_id": call_id,
+                        "sequence": 1 if status == "started" else 2,
+                        "tool": name,
+                        "status": status,
+                    },
+                    session_id,
+                )
+            ]
+        )
+
+    async def _persist_job_audit(
+        self, event: dict[str, Any], session_id: str | None
+    ) -> None:
+        kind = event.get("type")
+        job_id = event.get("job_id")
+        if self._audit_provider is None or kind not in {
+            "job_started", "job_finished"
+        } or not job_id:
+            return
+        status = "started" if kind == "job_started" else str(event.get("state", "finished"))
+        await self._audit_provider.append_events(
+            [
+                self._scope_audit(
+                    {
+                        "type": "job_audit",
+                        "root_call_id": str(job_id),
+                        "sequence": 1 if kind == "job_started" else 2,
+                        "status": status,
+                    },
+                    session_id,
+                )
+            ]
+        )
+
+    async def _persist_approval_audit(self, session_id: str | None) -> None:
+        if self._audit_provider is None:
+            return
+        await self._audit_provider.append_events(
+            [
+                self._scope_audit(
+                    {
+                        "type": "approval_audit",
+                        "root_call_id": f"approval-{uuid.uuid4().hex}",
+                        "sequence": 1,
+                        "status": "required",
+                    },
+                    session_id,
+                )
+            ]
+        )
 
     async def astream(
         self, message: str, *, thread_id: str | None = None, resume: Any = None
