@@ -62,6 +62,9 @@
     `plugin.context.budget_bytes > 0` 时返回 state update，否则不注入；它不使用
     `create_agent(transformers=...)` 的流事件接口。证据：`tests/test_context_middleware.py`。
     尚未完成 checkpoint round-trip 集成验证。
+  - 已验证 LangGraph `add_messages` reducer：单纯返回压缩后的子集不会删除旧消息；
+    middleware 现在在确需压缩时先发 `RemoveMessage(id=REMOVE_ALL_MESSAGES)` 再写入保留
+    消息。见 `test_context_middleware_replaces_checkpoint_history`。
 - [ ] P3-E3 cross-process goal resume：从 SQLite checkpoint 恢复 agent/session/goal 状态，
   防止重复完成和 revision 回退。
   - 已补 goal SQLite 的 `agent_id` 隔离和数据库级 revision CAS；同一数据库内两个

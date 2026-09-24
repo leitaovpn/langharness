@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from langchain.agents.middleware import before_model
+from langchain_core.messages import RemoveMessage
+from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from pelix.ipopo.decorators import ComponentFactory, Property, Provides
 
 from langharness_core.contracts import MiddlewareProvider
@@ -32,7 +34,10 @@ class ContextCompressionMiddlewarePlugin:
         @before_model(name=self._plugin_name)
         def compress(state: Any, runtime: Any) -> dict[str, Any]:
             messages = state.get("messages", [])
-            return {"messages": compress_messages(messages, budget_bytes=budget)}
+            kept = compress_messages(messages, budget_bytes=budget)
+            if len(kept) == len(messages):
+                return {}
+            return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *kept]}
 
         return [compress]
 
