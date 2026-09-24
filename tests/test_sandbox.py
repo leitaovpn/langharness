@@ -7,7 +7,13 @@ from pathlib import Path
 
 import pytest
 
+from langharness_core.plugins.exec import sandbox as sandbox_module
 from langharness_core.plugins.exec.sandbox import OSSandboxPlugin
+
+
+@pytest.fixture
+def linux_bwrap(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sandbox_module, "_IS_LINUX", True)
 
 
 def test_unavailable_sandbox_is_explicitly_process_only() -> None:
@@ -24,6 +30,7 @@ def test_unavailable_sandbox_is_explicitly_process_only() -> None:
 
 def test_explicit_bwrap_wraps_command_and_reports_os_sandbox(
     tmp_path: Path,
+    linux_bwrap: None,
 ) -> None:
     plugin = OSSandboxPlugin()
     backend = tmp_path / "bwrap"
@@ -56,7 +63,7 @@ def test_explicit_bwrap_wraps_command_and_reports_os_sandbox(
     assert plugin.get_isolation() == "os-sandbox"
 
 
-def test_bwrap_rejects_cwd_outside_workspace(tmp_path: Path) -> None:
+def test_bwrap_rejects_cwd_outside_workspace(tmp_path: Path, linux_bwrap: None) -> None:
     plugin = OSSandboxPlugin()
     backend = tmp_path / "bwrap"
     backend.touch(mode=0o700)
@@ -77,7 +84,9 @@ def test_bwrap_rejects_cwd_outside_workspace(tmp_path: Path) -> None:
         )
 
 
-def test_bwrap_mounts_only_explicit_trusted_read_only_file(tmp_path: Path) -> None:
+def test_bwrap_mounts_only_explicit_trusted_read_only_file(
+    tmp_path: Path, linux_bwrap: None
+) -> None:
     plugin = OSSandboxPlugin()
     backend = tmp_path / "bwrap"
     backend.touch(mode=0o700)
@@ -104,7 +113,7 @@ def test_bwrap_mounts_only_explicit_trusted_read_only_file(tmp_path: Path) -> No
         )
 
 
-def test_non_executable_bwrap_is_rejected(tmp_path: Path) -> None:
+def test_non_executable_bwrap_is_rejected(tmp_path: Path, linux_bwrap: None) -> None:
     plugin = OSSandboxPlugin()
     backend = tmp_path / "bwrap"
     backend.touch(mode=0o600)
@@ -119,4 +128,18 @@ def test_incomplete_macos_policy_is_rejected() -> None:
     plugin = OSSandboxPlugin()
     plugin._backend = "/usr/bin/sandbox-exec"
     with pytest.raises(RuntimeError, match="bwrap"):
+        plugin.get_isolation()
+
+
+def test_bwrap_is_rejected_on_non_linux_platform(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sandbox_module, "_IS_LINUX", False)
+    backend = tmp_path / "bwrap"
+    backend.touch(mode=0o700)
+    backend.chmod(0o700)
+    plugin = OSSandboxPlugin()
+    plugin._backend = str(backend)
+
+    with pytest.raises(RuntimeError, match="Linux"):
         plugin.get_isolation()

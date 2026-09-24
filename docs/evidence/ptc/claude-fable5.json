@@ -1,0 +1,1 @@
+{"protocol": "anthropic", "error_type": "AnthropicPermissionDeniedError", "error_category": "quota_exhausted", "status": 403}

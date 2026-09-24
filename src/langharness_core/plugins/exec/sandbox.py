@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Literal
 
 from pelix.ipopo.decorators import ComponentFactory, Property, Provides
 
 from langharness_core.contracts import SandboxProvider
+
+_IS_LINUX = sys.platform.startswith("linux")
 
 
 @ComponentFactory("sandbox-plugin-factory")
@@ -27,6 +30,8 @@ class OSSandboxPlugin:
     def _validated_backend(self) -> str | None:
         if not self._backend:
             return None
+        if not _IS_LINUX:
+            raise RuntimeError("bwrap OS isolation is supported only on Linux")
         path = Path(self._backend)
         if path.name != "bwrap" or not path.is_file():
             raise RuntimeError("Only an explicitly configured bwrap executable is supported")

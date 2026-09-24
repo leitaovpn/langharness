@@ -38,7 +38,8 @@
     使用独立 PID/IPC/网络命名空间、清空环境并设置最小 PATH/HOME/TMPDIR。
     exec 传入 workspace 根目录，PTC 显式挂载 Node 可执行文件和 bootstrap 脚本。
   - 单元测试验证无宿主 `/` 映射、工作目录/软链越界拒绝；当前开发机没有 `bwrap`，
-    尚无真实 Linux bwrap 执行验证。资源限制、macOS 可用策略仍未完成。
+    尚无真实 Linux bwrap 执行验证。非 Linux 平台显式拒绝 `bwrap`。资源限制、
+    macOS 可用策略仍未完成。
 - [ ] P3-C1 reviewer provider：可选 reviewer agent，只产生独立证据，不绕过 verify/finish
   的确定性门禁；缺少 provider 时明确 disabled。
 - [ ] P3-D1 web/skills/delivery：按 scope 可选装配，声明 schema、权限和 artifact；默认不启用。
@@ -53,12 +54,17 @@
     将无密钥的摘要写入 pytest 临时目录。2026-09-23：`deepseek-v4-flash`（chat）
     `1 passed`，`claude-fable5`（anthropic）`1 passed`；两者均执行 `tools.add` 并返回 5。
   - `chatgpt-5`（responses）实际调用失败：上游 HTTP 500，响应事件缺少 `object` 字段；
-    尚无可用的 Responses 兼容 provider 验收证据。原始 NDJSON、artifact、checkpoint
-    摘要也尚未保存。
+    尚无可用的 Responses 兼容 provider 验收证据。成功运行的原始 NDJSON、artifact、
+    checkpoint 摘要也尚未保存。
+  - 2026-09-24 复测：真实 smoke 已支持在 `LANG_HARNESS_REAL_LLM_EVIDENCE_DIR` 指定目录
+    保存脱敏 NDJSON 与 checkpoint/tool 摘要；证据见 `docs/evidence/ptc/`。
+    当前 chat 与 anthropic 均在模型调用阶段返回 HTTP 403（免费额度耗尽），responses
+    返回 `ValueError: No generations found in stream`，均未进入 `run_code`，本轮无成功
+    artifact/checkpoint。此前 2026-09-23 两协议成功记录不能替代当前三协议验收。
 - [ ] P3-F2 final gate：P3 全部完成后运行 `make check`，覆盖率至少 95%，并完成真实 provider
   smoke 报告。
   - 当前中途门禁：2026-09-24 `make check` 通过；Ruff、mypy、Pyright、clean-process
-    import、`1367 passed, 3 skipped`，总覆盖率 `95.47%`。3 个跳过项包括尚未纳入
+    import、`1370 passed, 3 skipped`，总覆盖率 `95.48%`。3 个跳过项包括尚未纳入
     默认门禁的真实模型 smoke；这不是 Phase 3 最终验收。
 
 ## 当前环境证据
