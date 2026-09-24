@@ -468,6 +468,10 @@ class AuditProvider(Protocol):
         self, agent_id: str, session_id: str, limit: int = 100
     ) -> list[dict[str, Any]]: ...
 
+    async def find_pending_approval(
+        self, agent_id: str, session_id: str
+    ) -> dict[str, Any] | None: ...
+
     def get_plugin_info(self) -> dict[str, str]: ...
 
 

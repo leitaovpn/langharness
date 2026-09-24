@@ -188,6 +188,80 @@ def test_approval_request_is_persisted_without_action_arguments(tmp_path: Path) 
     plugin._invalidate(cast(Any, None))
 
 
+def test_approval_decision_is_linked_after_audit_store_reopen(tmp_path: Path) -> None:
+    path = str(tmp_path / "audit.sqlite3")
+    first = SQLiteAuditPlugin()
+    first._path = path
+    loop = PluginAgentLoop()
+    loop._audit_provider = first
+    loop._agent_id = "alpha"
+    request = {"action_requests": [{"name": "exec_command", "args": {"secret": "hidden"}}]}
+
+    async def interrupted() -> Any:
+        yield "updates", {"__interrupt__": (SimpleNamespace(value=request),)}
+
+    async def first_turn() -> None:
+        async for _ in loop._forward_stream(interrupted(), {}, {}, session_id="session-1"):
+            pass
+
+    asyncio.run(first_turn())
+    first._invalidate(cast(Any, None))
+
+    second = SQLiteAuditPlugin()
+    second._path = path
+    resumed_loop = PluginAgentLoop()
+    resumed_loop._audit_provider = second
+    resumed_loop._agent_id = "alpha"
+
+    class EmptyGraph:
+        async def astream(self, input_data: Any, config: Any = None, stream_mode: Any = None) -> Any:
+            if False:
+                yield "updates", {}
+
+    resumed_loop._graph = EmptyGraph()
+
+    async def resumed_turn() -> list[dict[str, Any]]:
+        async for _ in resumed_loop.astream(
+            "", thread_id="session-1",
+            resume={"decisions": [{"type": "approve", "secret": "hidden"}]},
+        ):
+            pass
+        assert await second.find_pending_approval("alpha", "session-1") is None
+        return await second.list_session_events("alpha", "session-1")
+
+    events = asyncio.run(resumed_turn())
+    second._invalidate(cast(Any, None))
+    assert [event["status"] for event in events] == [
+        "required", "decision_submitted", "decision_applied"
+    ]
+    assert len({event["root_call_id"] for event in events}) == 1
+    assert events[1]["decisions"] == ["approve"]
+    assert all("hidden" not in str(event) for event in events)
+
+
+def test_pending_approval_lookup_is_not_limited_by_session_list_page(tmp_path: Path) -> None:
+    plugin = SQLiteAuditPlugin()
+    plugin._path = str(tmp_path / "audit.sqlite3")
+
+    async def scenario() -> dict[str, Any] | None:
+        await plugin.append_events([{
+            "type": "approval_audit", "root_call_id": "approval-1", "sequence": 1,
+            "status": "required", "agent_id": "alpha", "session_id": "session-1",
+        }])
+        await plugin.append_events([
+            {"type": "tool_audit", "root_call_id": f"tool-{index}", "sequence": 1,
+             "agent_id": "alpha", "session_id": "session-1"}
+            for index in range(150)
+        ])
+        assert await plugin.find_pending_approval("beta", "session-1") is None
+        return await plugin.find_pending_approval("alpha", "session-1")
+
+    pending = asyncio.run(scenario())
+    plugin._invalidate(cast(Any, None))
+    assert pending is not None
+    assert pending["root_call_id"] == "approval-1"
+
+
 def test_audit_survives_store_reopen_and_sync_agent_path(tmp_path: Path) -> None:
     path = str(tmp_path / "audit.sqlite3")
     first = SQLiteAuditPlugin()

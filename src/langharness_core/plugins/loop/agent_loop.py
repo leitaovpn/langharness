@@ -1144,6 +1144,31 @@ class PluginAgentLoop:
         previous_content: dict[str, str] = {}
         usage_totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         audit_events: list[dict[str, Any]] = []
+        approval_root: str | None = None
+        approval_decisions: list[str] = []
+        if resume is not None and thread_id and self._audit_provider is not None:
+            pending = await self._audit_provider.find_pending_approval(
+                self._agent_id, thread_id
+            )
+            if pending is not None:
+                approval_root = str(pending["root_call_id"])
+                raw_decisions = resume.get("decisions", []) if isinstance(resume, dict) else []
+                if isinstance(raw_decisions, list):
+                    approval_decisions = [
+                        str(item.get("type"))
+                        if isinstance(item, dict) and item.get("type") in {"approve", "reject", "edit"}
+                        else "unknown"
+                        for item in raw_decisions
+                    ]
+                await self._audit_provider.append_events(
+                    [self._scope_audit({
+                        "type": "approval_audit",
+                        "root_call_id": approval_root,
+                        "sequence": 2,
+                        "status": "decision_submitted",
+                        "decisions": approval_decisions,
+                    }, thread_id)]
+                )
         input_value: Any = (
             Command(resume=resume)
             if resume is not None
@@ -1167,6 +1192,17 @@ class PluginAgentLoop:
                 session_id=thread_id,
             ):
                 yield event
+            if approval_root is not None and self._audit_provider is not None:
+                await self._audit_provider.append_events(
+                    [self._scope_audit({
+                        "type": "approval_audit",
+                        "root_call_id": approval_root,
+                        "sequence": 3,
+                        "status": "decision_applied",
+                        "decisions": approval_decisions,
+                    }, thread_id)]
+                )
+                approval_root = None
             decision = self._decide(rounds_run)
             if decision is None:
                 break

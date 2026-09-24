@@ -30,8 +30,13 @@
   - 新增：stream 将 exec 工具开始/结束、后台 job 开始/结束与审批请求写入审计库，
     只保存元数据，不保存命令参数、输出或审批参数；对应测试见
     `tests/test_audit_persistence.py`。
-  - 待完成：审批决策结果、同步 `_run_code` 路径的会话元数据，以及跨进程恢复时的
-    审计事件关联验证。
+  - 新增：恢复流从持久化审计库查询同 agent/session 的未决审批，将决策类型以
+    `decision_submitted` 和 `decision_applied` 两条追加事件关联到原审批 root；仅在图流
+    正常结束后写入 applied，且不保存 resume 参数。测试覆盖审计库重开后关联、超出普通
+    session 查询分页的未决请求，以及 agent 隔离。`decision_applied` 只表示图流处理完毕，
+    不表示被审批工具一定执行成功。
+  - 待完成：同步 `_run_code` 路径的会话元数据，真实跨进程 agent/checkpoint 恢复时的
+    审计事件关联验证，以及崩溃后的决策提交重试/幂等语义。
 - [ ] P3-A3 sandbox policy：workspace 读写范围、网络默认拒绝、环境白名单、资源限制和
   symlink 防逃逸；为 macOS `sandbox-exec` 与 Linux `bwrap` 分别测试。
   - Linux `bwrap` argv 已改为仅映射系统运行时目录、指定 workspace 与可信只读文件；

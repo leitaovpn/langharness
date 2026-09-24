@@ -82,6 +82,28 @@ class SQLiteAuditPlugin:
             rows = await cursor.fetchall()
         return [json.loads(row[0]) for row in rows]
 
+    async def find_pending_approval(
+        self, agent_id: str, session_id: str
+    ) -> dict[str, Any] | None:
+        connection = await self._ensure_connection()
+        async with connection.execute(
+            "SELECT request.event_json FROM audit_events AS request "
+            "WHERE request.agent_id = ? AND request.session_id = ? "
+            "AND json_extract(request.event_json, '$.type') = 'approval_audit' "
+            "AND json_extract(request.event_json, '$.status') = 'required' "
+            "AND NOT EXISTS ("
+            "SELECT 1 FROM audit_events AS decision "
+            "WHERE decision.root_call_id = request.root_call_id "
+            "AND decision.agent_id = request.agent_id "
+            "AND decision.session_id = request.session_id "
+            "AND json_extract(decision.event_json, '$.type') = 'approval_audit' "
+            "AND json_extract(decision.event_json, '$.status') = 'decision_submitted'"
+            ") ORDER BY request.id DESC LIMIT 1",
+            (agent_id, session_id),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return json.loads(row[0]) if row is not None else None
+
     async def _ensure_connection(self) -> aiosqlite.Connection:
         if self._connection is None:
             path = Path(self._path).expanduser()
