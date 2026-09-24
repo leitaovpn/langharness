@@ -42,3 +42,18 @@ def compress_messages(
         result.append(message)
         used += size
     return list(reversed(result))
+
+
+class ContextCompressionTransformer:
+    """State transformer suitable for a LangGraph transformer provider."""
+
+    def __init__(self, budget_bytes: int) -> None:
+        if budget_bytes < 1:
+            raise ValueError("budget_bytes must be positive")
+        self.budget_bytes = budget_bytes
+
+    def __call__(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        messages = state.get("messages")
+        if not isinstance(messages, Iterable) or isinstance(messages, (str, bytes)):
+            return dict(state)
+        return {**state, "messages": compress_messages(messages, budget_bytes=self.budget_bytes)}
