@@ -41,6 +41,7 @@ SPEC_TOOL_PRESENTATION = "agent.plugin.tool_presentation"
 SPEC_PTC_RUNTIME = "agent.plugin.ptc_runtime"
 SPEC_SANDBOX = "agent.plugin.sandbox"
 SPEC_AUDIT = "agent.plugin.audit"
+SPEC_REVIEWER = "agent.plugin.reviewer"
 ModelProtocol = Literal["anthropic", "chat", "responses"]
 ToolPresentationMode = Literal["native", "ptc", "both"]
 
@@ -71,6 +72,7 @@ ALL_PLUGIN_SPECS = (
     SPEC_PTC_RUNTIME,
     SPEC_SANDBOX,
     SPEC_AUDIT,
+    SPEC_REVIEWER,
     SPEC_AGENT_LOOP,
     SPEC_SESSION_INDEX,
     SPEC_AGENT_REGISTRY,
@@ -465,6 +467,18 @@ class AuditProvider(Protocol):
     async def list_session_events(
         self, agent_id: str, session_id: str, limit: int = 100
     ) -> list[dict[str, Any]]: ...
+
+    def get_plugin_info(self) -> dict[str, str]: ...
+
+
+@service_contract(SPEC_REVIEWER)
+@runtime_checkable
+class ReviewerProvider(Protocol):
+    """Optional independent review evidence; never a completion gate."""
+
+    def is_enabled(self) -> bool: ...
+
+    def review(self, subject: dict[str, Any]) -> dict[str, Any]: ...
 
     def get_plugin_info(self) -> dict[str, str]: ...
 

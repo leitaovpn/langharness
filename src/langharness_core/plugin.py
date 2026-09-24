@@ -26,6 +26,7 @@ from langharness_core.contracts import (
     SPEC_PROMPT_SECTION,
     SPEC_PTC_RUNTIME,
     SPEC_RESPONSE_FORMAT,
+    SPEC_REVIEWER,
     SPEC_RUN_CONTROLLER,
     SPEC_SANDBOX,
     SPEC_SESSION_INDEX,
@@ -99,6 +100,11 @@ AGENT_PLUGIN_CATALOG: dict[str, tuple[str, str, str]] = {
         "langharness_core.plugins.verifier.project",
         "project-verifier-plugin-factory",
         SPEC_VERIFIER,
+    ),
+    "reviewer": (
+        "langharness_core.plugins.reviewer.provider",
+        "reviewer-plugin-factory",
+        SPEC_REVIEWER,
     ),
     "goal-tools": (
         "langharness_core.plugins.goals.tools",
@@ -317,6 +323,11 @@ AGENT_PLUGIN_DESCRIPTIONS: dict[str, str] = {
         "agent.plugin.workspace. Properties: plugin.workspace.root_dir, "
         "plugin.agent_id. Requires a restart for property changes. Uninstall "
         "when the agent is removed."
+    ),
+    "reviewer": (
+        "Optional independent review evidence provider. It is disabled by default "
+        "and cannot complete a goal or bypass the project verifier. Properties: "
+        "plugin.reviewer.enabled, plugin.agent_id."
     ),
     "repository-instructions": (
         "Contributes AGENTS.md and compatible instruction files from the "

@@ -45,6 +45,10 @@
     `tests/test_exec_runner.py`、`tests/test_job_manager.py` 定向 `39 passed`。
 - [ ] P3-C1 reviewer provider：可选 reviewer agent，只产生独立证据，不绕过 verify/finish
   的确定性门禁；缺少 provider 时明确 disabled。
+  - 已新增 `ReviewerProvider` 与可选 agent plugin catalog 项；默认 disabled，返回明确
+    `status=disabled`，即使启用占位实现也只返回独立元数据并声明 `completion_authority=verifier`。
+  - 证据：`tests/test_reviewer.py`（契约、disabled 行为、catalog descriptor）。尚未接入
+    外部 reviewer 模型和持久化 review artifact。
 - [ ] P3-D1 web/skills/delivery：按 scope 可选装配，声明 schema、权限和 artifact；默认不启用。
 - [ ] P3-E1 failure recovery：跨进程 job/Node 子进程恢复、重试边界、幂等 call id 和取消排空。
 - [ ] P3-E2 context compression：按 token/字节预算压缩历史，保留目标、验证报告、审计引用
