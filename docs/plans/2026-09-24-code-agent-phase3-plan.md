@@ -58,6 +58,8 @@
     verification、audit、approval、unfinished 标记的控制证据；输入预算非法时拒绝。
   - 证据：`tests/test_context_compression.py`。尚未把压缩器接入 LangGraph checkpoint
     transformer，也未完成 checkpoint round-trip 集成验证。
+  - 已补 `context-compression` agent plugin catalog 项；默认不注入 transformer，只有
+    `plugin.context.budget_bytes > 0` 才装配。证据：`tests/test_context_transformer_plugin.py`。
 - [ ] P3-E3 cross-process goal resume：从 SQLite checkpoint 恢复 agent/session/goal 状态，
   防止重复完成和 revision 回退。
   - 已补 goal SQLite 的 `agent_id` 隔离和数据库级 revision CAS；同一数据库内两个
