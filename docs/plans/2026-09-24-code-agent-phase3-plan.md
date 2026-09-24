@@ -6,8 +6,8 @@
 
 - [x] P3-A1 sandbox capability contract：新增 `SPEC_SANDBOX`、`SandboxProvider` 和
   `sandbox` 插件目录项。
-  - 无受支持 backend 时返回 `isolation="process-only"`，不会宣称 OS sandbox。
-  - 检测到 `sandbox-exec` 或 `bwrap` 时返回 `isolation="os-sandbox"`，并提供 argv wrapper。
+  - 默认返回 `isolation="process-only"`。只允许显式配置的 `bwrap`；当前 macOS
+    `sandbox-exec` 策略不完整，故拒绝启用，避免虚报 OS 隔离。
   - 证据：`tests/test_sandbox.py`，`.venv/bin/pytest -q tests/test_sandbox.py tests/test_imports.py`
     → `3 passed`；Ruff、mypy 通过。
 
@@ -21,14 +21,15 @@
   - 证据：`tests/test_ptc_runtime.py::test_runtime_reports_bound_sandbox_isolation`、
     `tests/test_exec_tools.py::test_exec_command_uses_bound_sandbox_and_reports_isolation`；
     exec 定向测试 `24 passed`；backend policy/resource limits 仍待完成。
-- [x] P3-B1 audit persistence：新增 append-only SQLite audit provider，并由 agent loop 在
+- [ ] P3-B1 audit persistence：新增 append-only SQLite audit provider，并由 agent loop 在
   stream 输出 `ptc_audit` 时写入持久化存储。
-  - 证据：`tests/test_audit_persistence.py` round-trip 保持 sequence；runtime stream audit
-    回归测试通过；Ruff、mypy 通过。
+  - 已完成：默认装配、stream 与同步 `_run_code` 写入、重启后按序查询；stream PTC
+    事件标记 agent/session 并支持按两者查询，旧版 SQLite 表自动迁移。
+  - 证据：`tests/test_audit_persistence.py` round-trip、reopen、scope 查询、旧库迁移；
+    与 PTC runtime/code-agent e2e 定向执行 `28 passed, 1 skipped`。
+  - 待完成：exec/job/approval 事件；同步 `_run_code` 路径仍缺会话元数据。
 - [ ] P3-A3 sandbox policy：workspace 读写范围、网络默认拒绝、环境白名单、资源限制和
   symlink 防逃逸；为 macOS `sandbox-exec` 与 Linux `bwrap` 分别测试。
-- [ ] P3-B1 audit persistence：把 `ptc_audit` 和 exec/job/approval 事件写入 append-only
-  SQLite，按 agent/session 查询，保留 stream 摘要。
 - [ ] P3-C1 reviewer provider：可选 reviewer agent，只产生独立证据，不绕过 verify/finish
   的确定性门禁；缺少 provider 时明确 disabled。
 - [ ] P3-D1 web/skills/delivery：按 scope 可选装配，声明 schema、权限和 artifact；默认不启用。
@@ -39,10 +40,20 @@
   防止重复完成和 revision 回退。
 - [ ] P3-F1 real provider smoke：设置 `LANG_HARNESS_REAL_LLM_PROVIDER`、密钥和 protocol，
   对 chat/anthropic/responses 各执行一轮；保存原始 NDJSON、artifact、checkpoint 摘要。
+  - `tests/test_ptc_real_provider.py` 使用本地 provider 配置运行真实 PTC `run_code` 调用，
+    将无密钥的摘要写入 pytest 临时目录。2026-09-23：`deepseek-v4-flash`（chat）
+    `1 passed`，`claude-fable5`（anthropic）`1 passed`；两者均执行 `tools.add` 并返回 5。
+  - `chatgpt-5`（responses）实际调用失败：上游 HTTP 500，响应事件缺少 `object` 字段；
+    尚无可用的 Responses 兼容 provider 验收证据。原始 NDJSON、artifact、checkpoint
+    摘要也尚未保存。
 - [ ] P3-F2 final gate：P3 全部完成后运行 `make check`，覆盖率至少 95%，并完成真实 provider
   smoke 报告。
+  - 当前中途门禁：2026-09-24 `make check` 通过；Ruff、mypy、Pyright、clean-process
+    import、`1362 passed, 3 skipped`，总覆盖率 `95.49%`。3 个跳过项包括尚未纳入
+    默认门禁的真实模型 smoke；这不是 Phase 3 最终验收。
 
 ## 当前环境证据
 
-当前 shell 未设置 `LANG_HARNESS_REAL_LLM_PROVIDER`，因此真实外部模型验证尚未执行；fake
-model 的三协议 PTC 证据见 `docs/plans/2026-09-23-code-agent-ptc-plan.md`。
+当前 shell 未设置 `LANG_HARNESS_REAL_LLM_PROVIDER`，但本地 provider 配置可供 opt-in
+smoke 使用；已单独执行上述 chat 与 anthropic 验证。fake model 的三协议 PTC 证据见
+`docs/plans/2026-09-23-code-agent-ptc-plan.md`。

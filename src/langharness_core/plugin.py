@@ -708,6 +708,21 @@ def sandbox_descriptor() -> PluginDescriptor:
     )
 
 
+def audit_descriptor() -> PluginDescriptor:
+    """Static definition of the shared append-only audit store."""
+    return PluginDescriptor(
+        name="audit",
+        version="1.0.0",
+        module="langharness_core.plugins.sessions.audit",
+        factory="audit-plugin-factory",
+        specification=SPEC_AUDIT,
+        description=(
+            "Persists execution audit events in append-only SQLite storage. "
+            "Implements agent.plugin.audit."
+        ),
+    )
+
+
 def builtin_package() -> PluginPackage:
     """Describe server-scoped core plugins and agent plugin templates."""
     return PluginPackage(
@@ -716,6 +731,7 @@ def builtin_package() -> PluginPackage:
         contributions=(
             PluginContribution("ptc-runtime", "root", ptc_runtime_descriptor()),
             PluginContribution("sandbox", "root", sandbox_descriptor()),
+            PluginContribution("audit", "root", audit_descriptor()),
             PluginContribution(
                 "sqlite-checkpointer", "server", sqlite_checkpointer_descriptor()
             ),

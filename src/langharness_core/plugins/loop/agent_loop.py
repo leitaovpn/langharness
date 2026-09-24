@@ -19,6 +19,7 @@ from pelix.ipopo.decorators import (
     ComponentFactory,
     HiddenProperty,
     Invalidate,
+    Property,
     Provides,
     Requires,
     RequiresBest,
@@ -150,6 +151,7 @@ def _iter_interrupts(container: Any) -> Iterator[Any]:
 @ComponentFactory("agent-loop-factory")
 @Provides(AgentLoopProvider)
 @HiddenProperty("_scope_chain", "plugin.scope_chain", None)
+@Property("_agent_id", "plugin.agent_id", "")
 @RequiresBest("_llm_provider", LLMProvider, optional=False, immediate_rebind=True)
 @Requires("_scoped_llm_providers", LLMProvider, aggregate=True, optional=True)
 @Requires("_tool_providers", ToolProvider, aggregate=True, optional=True)
@@ -246,6 +248,7 @@ class PluginAgentLoop:
 
     def __init__(self) -> None:
         self._scope_chain: list[str] = []
+        self._agent_id = ""
         self._service_metadata: dict[int, tuple[str, str, int]] = {}
         self._llm_provider: Any = None
         self._scoped_llm_providers: list[Any] = []
@@ -742,6 +745,8 @@ class PluginAgentLoop:
         collector = PTC_AUDIT_EVENTS.get()
         if collector is not None:
             collector.extend(audit)
+        elif self._audit_provider is not None and audit:
+            await self._audit_provider.append_events(audit)
         return result
 
     def _collect_native_tools(self) -> list[Any]:
@@ -964,6 +969,7 @@ class PluginAgentLoop:
         previous_content: dict[str, str],
         usage_totals: dict[str, int],
         audit_events: list[dict[str, Any]] | None = None,
+        session_id: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Translate one graph run's chunks into stream events.
 
@@ -974,6 +980,7 @@ class PluginAgentLoop:
             if audit_events:
                 while audit_events:
                     audit = audit_events.pop(0)
+                    audit = self._scope_audit(audit, session_id)
                     if self._audit_provider is not None:
                         await self._audit_provider.append_events([audit])
                     yield audit
@@ -1036,9 +1043,15 @@ class PluginAgentLoop:
         if audit_events:
             while audit_events:
                 audit = audit_events.pop(0)
+                audit = self._scope_audit(audit, session_id)
                 if self._audit_provider is not None:
                     await self._audit_provider.append_events([audit])
                 yield audit
+
+    def _scope_audit(
+        self, audit: dict[str, Any], session_id: str | None
+    ) -> dict[str, Any]:
+        return {**audit, "agent_id": self._agent_id, "session_id": session_id or ""}
 
     async def astream(
         self, message: str, *, thread_id: str | None = None, resume: Any = None
@@ -1071,7 +1084,8 @@ class PluginAgentLoop:
         rounds_run = 0
         while True:
             async for event in self._forward_stream(
-                run_graph(input_value), previous_content, usage_totals, audit_events
+                run_graph(input_value), previous_content, usage_totals, audit_events,
+                session_id=thread_id,
             ):
                 yield event
             decision = self._decide(rounds_run)
@@ -1116,6 +1130,7 @@ class PluginAgentLoop:
                 previous_content,
                 usage_totals,
                 audit_events,
+                session_id=thread_id,
             ):
                 yield event
             break

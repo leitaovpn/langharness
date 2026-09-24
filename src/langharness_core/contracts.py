@@ -456,6 +456,10 @@ class AuditProvider(Protocol):
 
     async def list_events(self, root_call_id: str, limit: int = 100) -> list[dict[str, Any]]: ...
 
+    async def list_session_events(
+        self, agent_id: str, session_id: str, limit: int = 100
+    ) -> list[dict[str, Any]]: ...
+
     def get_plugin_info(self) -> dict[str, str]: ...
 
 

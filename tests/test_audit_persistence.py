@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
+from pathlib import Path
+from typing import Any, cast
 
+from langharness_core.plugins.loop.agent_loop import PluginAgentLoop
+from langharness_core.plugins.presentation.runtime import NodePTCRuntime
 from langharness_core.plugins.sessions.audit import SQLiteAuditPlugin
+from langharness_core.plugins.tools.tools import ToolPlugin
 
 
-def test_audit_events_round_trip_and_preserve_sequence(tmp_path) -> None:
+def test_audit_events_round_trip_and_preserve_sequence(tmp_path: Path) -> None:
     plugin = SQLiteAuditPlugin()
     plugin._path = str(tmp_path / "audit.sqlite3")
     events = [
@@ -15,8 +21,116 @@ def test_audit_events_round_trip_and_preserve_sequence(tmp_path) -> None:
         {"type": "ptc_audit", "root_call_id": "root-1", "sequence": 2, "status": "completed", "result": 3},
     ]
 
-    async def scenario() -> list[dict]:
+    async def scenario() -> list[dict[str, Any]]:
         await plugin.append_events(events)
         return await plugin.list_events("root-1")
 
     assert asyncio.run(scenario()) == events
+    plugin._invalidate(cast(Any, None))
+
+
+def test_audit_events_can_be_queried_by_agent_and_session(tmp_path: Path) -> None:
+    plugin = SQLiteAuditPlugin()
+    plugin._path = str(tmp_path / "audit.sqlite3")
+    events = [
+        {"root_call_id": "root-1", "sequence": 1, "agent_id": "alpha", "session_id": "one"},
+        {"root_call_id": "root-2", "sequence": 1, "agent_id": "alpha", "session_id": "two"},
+        {"root_call_id": "root-3", "sequence": 1, "agent_id": "beta", "session_id": "one"},
+    ]
+
+    async def scenario() -> list[dict[str, Any]]:
+        await plugin.append_events(events)
+        return await plugin.list_session_events("alpha", "one")
+
+    assert asyncio.run(scenario()) == [events[0]]
+    plugin._invalidate(cast(Any, None))
+
+
+def test_stream_audit_is_scoped_to_agent_and_session(tmp_path: Path) -> None:
+    plugin = SQLiteAuditPlugin()
+    plugin._path = str(tmp_path / "audit.sqlite3")
+    loop = PluginAgentLoop()
+    loop._audit_provider = plugin
+    loop._agent_id = "alpha"
+    event = {"type": "ptc_audit", "root_call_id": "root-1", "sequence": 1}
+
+    async def empty_stream() -> Any:
+        if False:
+            yield ("messages", None)
+
+    async def scenario() -> list[dict[str, Any]]:
+        emitted = [
+            item
+            async for item in loop._forward_stream(
+                empty_stream(), {}, {}, [event], session_id="session-1"
+            )
+        ]
+        stored = await plugin.list_session_events("alpha", "session-1")
+        assert stored == emitted
+        return emitted
+
+    assert asyncio.run(scenario())[0]["session_id"] == "session-1"
+    plugin._invalidate(cast(Any, None))
+
+
+def test_existing_audit_database_is_migrated(tmp_path: Path) -> None:
+    path = tmp_path / "audit.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE audit_events (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "root_call_id TEXT NOT NULL, sequence INTEGER NOT NULL, "
+            "event_json TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+        connection.execute(
+            "INSERT INTO audit_events(root_call_id, sequence, event_json) "
+            "VALUES ('old-root', 1, '{\"root_call_id\": \"old-root\"}')"
+        )
+    plugin = SQLiteAuditPlugin()
+    plugin._path = str(path)
+
+    async def scenario() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        old = await plugin.list_events("old-root")
+        new_event = {"root_call_id": "new-root", "agent_id": "a", "session_id": "s"}
+        await plugin.append_events([new_event])
+        return old, await plugin.list_session_events("a", "s")
+
+    assert asyncio.run(scenario()) == (
+        [{"root_call_id": "old-root"}],
+        [{"root_call_id": "new-root", "agent_id": "a", "session_id": "s"}],
+    )
+    plugin._invalidate(cast(Any, None))
+
+
+def test_audit_survives_store_reopen_and_sync_agent_path(tmp_path: Path) -> None:
+    path = str(tmp_path / "audit.sqlite3")
+    first = SQLiteAuditPlugin()
+    first._path = path
+    loop = PluginAgentLoop()
+    loop._ptc_runtime = NodePTCRuntime()
+    loop._tool_providers = [ToolPlugin()]
+    loop._audit_provider = first
+
+    async def scenario() -> str:
+        result = await loop._run_code("return await tools.add({a: 2, b: 3});")
+        assert result["result"] == 5
+        assert "audit" not in result
+        assert first._connection is not None
+        async with first._connection.execute(
+            "SELECT root_call_id FROM audit_events LIMIT 1"
+        ) as cursor:
+            row = await cursor.fetchone()
+        assert row is not None
+        return str(row[0])
+
+    root_id = asyncio.run(scenario())
+    first._invalidate(cast(Any, None))
+    second = SQLiteAuditPlugin()
+    second._path = path
+
+    async def reopen() -> list[dict[str, Any]]:
+        return await second.list_events(root_id)
+
+    events = asyncio.run(reopen())
+    second._invalidate(cast(Any, None))
+    assert [event["status"] for event in events] == ["started", "completed"]
+    assert events[1]["result"] == 5
