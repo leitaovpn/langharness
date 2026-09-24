@@ -106,11 +106,6 @@ AGENT_PLUGIN_CATALOG: dict[str, tuple[str, str, str]] = {
         "reviewer-plugin-factory",
         SPEC_REVIEWER,
     ),
-    "context-compression": (
-        "langharness_core.plugins.context.middleware",
-        "context-compression-middleware-plugin-factory",
-        SPEC_MIDDLEWARE,
-    ),
     "goal-tools": (
         "langharness_core.plugins.goals.tools",
         "goal-tools-plugin-factory",

@@ -58,7 +58,7 @@
     verification、audit、approval、unfinished 标记的控制证据；输入预算非法时拒绝。
   - 证据：`tests/test_context_compression.py`。尚未把压缩器接入 LangGraph checkpoint
     transformer，也未完成 checkpoint round-trip 集成验证。
-  - 已改走真实 `before_model` middleware：`context-compression` agent catalog 项在
+  - 已改走真实 `before_model` middleware：显式安装该可选 middleware 后，在
     `plugin.context.budget_bytes > 0` 时返回 state update，否则不注入；它不使用
     `create_agent(transformers=...)` 的流事件接口。证据：`tests/test_context_middleware.py`。
     尚未完成 checkpoint round-trip 集成验证。
