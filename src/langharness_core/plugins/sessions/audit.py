@@ -39,26 +39,28 @@ class SQLiteAuditPlugin:
         self._plugin_version = "1.0.0"
         self._path = str(Path.home() / ".langharness" / "audit.sqlite3")
         self._connection: aiosqlite.Connection | None = None
+        self._write_lock = asyncio.Lock()
 
     async def append_events(self, events: list[dict[str, Any]]) -> None:
         if not events:
             return
-        connection = await self._ensure_connection()
-        await connection.executemany(
-            "INSERT INTO audit_events(root_call_id, agent_id, session_id, sequence, event_json) "
-            "VALUES (?, ?, ?, ?, ?)",
-            [
-                (
-                    str(event.get("root_call_id", "")),
-                    str(event.get("agent_id", "")),
-                    str(event.get("session_id", "")),
-                    int(event.get("sequence", 0)),
-                    json.dumps(event, ensure_ascii=False, sort_keys=True),
-                )
-                for event in events
-            ],
-        )
-        await connection.commit()
+        async with self._write_lock:
+            connection = await self._ensure_connection()
+            await connection.executemany(
+                "INSERT INTO audit_events(root_call_id, agent_id, session_id, sequence, event_json) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    (
+                        str(event.get("root_call_id", "")),
+                        str(event.get("agent_id", "")),
+                        str(event.get("session_id", "")),
+                        int(event.get("sequence", 0)),
+                        json.dumps(event, ensure_ascii=False, sort_keys=True),
+                    )
+                    for event in events
+                ],
+            )
+            await connection.commit()
 
     async def list_events(self, root_call_id: str, limit: int = 100) -> list[dict[str, Any]]:
         connection = await self._ensure_connection()
@@ -103,6 +105,40 @@ class SQLiteAuditPlugin:
         ) as cursor:
             row = await cursor.fetchone()
         return json.loads(row[0]) if row is not None else None
+
+    async def claim_pending_approval(
+        self, agent_id: str, session_id: str, decisions: list[str]
+    ) -> str | None:
+        """Atomically claim one pending approval across competing processes."""
+        async with self._write_lock:
+            connection = await self._ensure_connection()
+            await connection.execute("BEGIN IMMEDIATE")
+            try:
+                pending = await self.find_pending_approval(agent_id, session_id)
+                if pending is None:
+                    await connection.rollback()
+                    return None
+                root_call_id = str(pending["root_call_id"])
+                event = {
+                    "type": "approval_audit",
+                    "root_call_id": root_call_id,
+                    "agent_id": agent_id,
+                    "session_id": session_id,
+                    "sequence": 2,
+                    "status": "decision_submitted",
+                    "decisions": decisions,
+                }
+                await connection.execute(
+                    "INSERT INTO audit_events(root_call_id, agent_id, session_id, "
+                    "sequence, event_json) VALUES (?, ?, ?, ?, ?)",
+                    (root_call_id, agent_id, session_id, 2,
+                     json.dumps(event, ensure_ascii=False, sort_keys=True)),
+                )
+                await connection.commit()
+                return root_call_id
+            except BaseException:
+                await connection.rollback()
+                raise
 
     async def _ensure_connection(self) -> aiosqlite.Connection:
         if self._connection is None:

@@ -1155,29 +1155,27 @@ class PluginAgentLoop:
         audit_events: list[dict[str, Any]] = []
         approval_root: str | None = None
         approval_decisions: list[str] = []
-        if resume is not None and thread_id and self._audit_provider is not None:
-            pending = await self._audit_provider.find_pending_approval(
-                self._agent_id, thread_id
+        if (
+            isinstance(resume, dict)
+            and "decisions" in resume
+            and self._audit_provider is not None
+        ):
+            if not thread_id:
+                raise ValueError("approval resume requires a thread_id")
+            raw_decisions = resume["decisions"]
+            if not isinstance(raw_decisions, list) or not raw_decisions:
+                raise ValueError("approval resume requires decisions")
+            approval_decisions = [
+                str(item.get("type"))
+                if isinstance(item, dict) and item.get("type") in {"approve", "reject", "edit"}
+                else "unknown"
+                for item in raw_decisions
+            ]
+            approval_root = await self._audit_provider.claim_pending_approval(
+                self._agent_id, thread_id, approval_decisions
             )
-            if pending is not None:
-                approval_root = str(pending["root_call_id"])
-                raw_decisions = resume.get("decisions", []) if isinstance(resume, dict) else []
-                if isinstance(raw_decisions, list):
-                    approval_decisions = [
-                        str(item.get("type"))
-                        if isinstance(item, dict) and item.get("type") in {"approve", "reject", "edit"}
-                        else "unknown"
-                        for item in raw_decisions
-                    ]
-                await self._audit_provider.append_events(
-                    [self._scope_audit({
-                        "type": "approval_audit",
-                        "root_call_id": approval_root,
-                        "sequence": 2,
-                        "status": "decision_submitted",
-                        "decisions": approval_decisions,
-                    }, thread_id)]
-                )
+            if approval_root is None:
+                raise RuntimeError("No pending approval for this agent and session")
         input_value: Any = (
             Command(resume=resume)
             if resume is not None

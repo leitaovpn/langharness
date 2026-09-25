@@ -38,8 +38,12 @@
   - 新增：同步 `invoke(thread_id=...)` 路径的 `_run_code` 审计记录 agent/session，
     `tests/test_audit_persistence.py::test_sync_invoke_scopes_ptc_audit_to_agent_and_session`
     使用真实 Node PTC 执行与 SQLite 查询验证。
-  - 待完成：真实跨进程 agent/checkpoint 恢复时的审计事件关联验证，以及崩溃后的决策
-    提交重试/幂等语义。
+  - 待完成：真实跨进程 agent/checkpoint 恢复时的审计事件关联验证，以及崩溃后已认领
+    决策的处置/重试语义。
+  - 审批认领与 `decision_submitted` 现在在 SQLite `BEGIN IMMEDIATE` 事务内原子完成；
+    两个独立连接同时认领仅有一个成功，重复恢复在进入图执行前拒绝。见
+    `tests/test_audit_persistence.py`。崩溃后已提交但未 `decision_applied` 的请求仍需人工
+    处置策略，不能自动重试可能已经发生副作用的动作。
 - [ ] P3-A3 sandbox policy：workspace 读写范围、网络默认拒绝、环境白名单、资源限制和
   symlink 防逃逸；为 macOS `sandbox-exec` 与 Linux `bwrap` 分别测试。
   - Linux `bwrap` argv 已改为仅映射系统运行时目录、指定 workspace 与可信只读文件；
@@ -65,6 +69,8 @@
     外部 reviewer 模型和持久化 review artifact。
 - [ ] P3-D1 web/skills/delivery：按 scope 可选装配，声明 schema、权限和 artifact；默认不启用。
 - [ ] P3-E1 failure recovery：跨进程 job/Node 子进程恢复、重试边界、幂等 call id 和取消排空。
+  - 已为审批恢复增加事务级单次认领与重复提交门禁；后台 job、PTC 调用及崩溃后审批
+    决策的恢复策略仍未完成。
 - [ ] P3-E2 context compression：按 token/字节预算压缩历史，保留目标、验证报告、审计引用
   和未完成审批；增加 checkpoint round-trip 测试。
   - 已新增纯函数 `compress_messages` 和纯状态投影

@@ -472,6 +472,10 @@ class AuditProvider(Protocol):
         self, agent_id: str, session_id: str
     ) -> dict[str, Any] | None: ...
 
+    async def claim_pending_approval(
+        self, agent_id: str, session_id: str, decisions: list[str]
+    ) -> str | None: ...
+
     def get_plugin_info(self) -> dict[str, str]: ...
 
 

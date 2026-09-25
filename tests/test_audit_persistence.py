@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 
 from langharness_core.plugins.loop.agent_loop import PluginAgentLoop
@@ -212,9 +213,11 @@ def test_approval_decision_is_linked_after_audit_store_reopen(tmp_path: Path) ->
     resumed_loop = PluginAgentLoop()
     resumed_loop._audit_provider = second
     resumed_loop._agent_id = "alpha"
+    graph_calls: list[Any] = []
 
     class EmptyGraph:
         async def astream(self, input_data: Any, config: Any = None, stream_mode: Any = None) -> Any:
+            graph_calls.append(input_data)
             if False:
                 yield "updates", {}
 
@@ -226,6 +229,13 @@ def test_approval_decision_is_linked_after_audit_store_reopen(tmp_path: Path) ->
             resume={"decisions": [{"type": "approve", "secret": "hidden"}]},
         ):
             pass
+        with pytest.raises(RuntimeError, match="No pending approval"):
+            async for _ in resumed_loop.astream(
+                "", thread_id="session-1",
+                resume={"decisions": [{"type": "approve"}]},
+            ):
+                pass
+        assert len(graph_calls) == 1
         assert await second.find_pending_approval("alpha", "session-1") is None
         return await second.list_session_events("alpha", "session-1")
 
@@ -260,6 +270,31 @@ def test_pending_approval_lookup_is_not_limited_by_session_list_page(tmp_path: P
     plugin._invalidate(cast(Any, None))
     assert pending is not None
     assert pending["root_call_id"] == "approval-1"
+
+
+def test_only_one_concurrent_resume_can_claim_an_approval(tmp_path: Path) -> None:
+    path = str(tmp_path / "audit.sqlite3")
+    first = SQLiteAuditPlugin()
+    first._path = path
+    second = SQLiteAuditPlugin()
+    second._path = path
+
+    async def scenario() -> tuple[list[str | None], list[dict[str, Any]]]:
+        await first.append_events([{
+            "type": "approval_audit", "root_call_id": "approval-1", "sequence": 1,
+            "status": "required", "agent_id": "alpha", "session_id": "session-1",
+        }])
+        claims = await asyncio.gather(
+            first.claim_pending_approval("alpha", "session-1", ["approve"]),
+            second.claim_pending_approval("alpha", "session-1", ["approve"]),
+        )
+        return list(claims), await first.list_events("approval-1")
+
+    claims, events = asyncio.run(scenario())
+    first._invalidate(cast(Any, None))
+    second._invalidate(cast(Any, None))
+    assert sorted(str(claim) for claim in claims) == ["None", "approval-1"]
+    assert [event["status"] for event in events] == ["required", "decision_submitted"]
 
 
 def test_audit_survives_store_reopen_and_sync_agent_path(tmp_path: Path) -> None:
