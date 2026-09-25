@@ -98,7 +98,9 @@ def test_real_reviewer_smoke(tmp_path: Path) -> None:
     reviewer._path = str(tmp_path / "review.sqlite3")
     result = reviewer.review({"goal": "Check that 2 + 3 equals 5", "artifact": "answer.txt"})
     safe = {"status": result.get("status"), "error_type": result.get("error_type")}
-    (tmp_path / f"{re.sub(r'[^A-Za-z0-9_-]', '_', provider_name)}.json").write_text(
+    evidence_dir = Path(os.environ.get("LANG_HARNESS_REAL_LLM_EVIDENCE_DIR", str(tmp_path)))
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    (evidence_dir / f"reviewer-{re.sub(r'[^A-Za-z0-9_-]', '_', provider_name)}.json").write_text(
         json.dumps(safe) + "\n", encoding="utf-8"
     )
     assert result["status"] == "completed"
