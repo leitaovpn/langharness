@@ -51,6 +51,10 @@
   - exec foreground/background 现在在 Linux 子进程设置 CPU（按 timeout）与地址空间
     上限；macOS/Windows 保留已有 wall-clock、输出字节和 job 数上限。证据：
     `tests/test_exec_runner.py`、`tests/test_job_manager.py` 定向 `39 passed`。
+  - PTC Node 子进程现传入最小环境白名单，固定 HOME/TMPDIR；真实 Node 回归测试证明
+    宿主 `LANG_HARNESS_TEST_SECRET` 不再通过 `process.env` 暴露。注意默认
+    `process-only` 仍能访问宿主文件系统，不可把环境过滤当成 OS 沙箱。PTC 子进程的
+    Linux CPU/内存限制及真实 bwrap 验证仍待完成。
 - [ ] P3-C1 reviewer provider：可选 reviewer agent，只产生独立证据，不绕过 verify/finish
   的确定性门禁；缺少 provider 时明确 disabled。
   - 已新增 `ReviewerProvider` 与可选 agent plugin catalog 项；默认 disabled，返回明确

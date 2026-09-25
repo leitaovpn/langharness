@@ -118,6 +118,20 @@ async def test_runtime_returns_only_program_output_and_process_isolation() -> No
 
 
 @pytest.mark.asyncio
+async def test_runtime_does_not_inherit_host_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LANG_HARNESS_TEST_SECRET", "private-value")
+    runtime = NodePTCRuntime()
+
+    result = await runtime.execute(
+        code='return process.env.LANG_HARNESS_TEST_SECRET ?? "absent";',
+        sdk="",
+        dispatch=lambda _name, _args: None,
+    )
+
+    assert result["result"] == "absent"
+
+
+@pytest.mark.asyncio
 async def test_runtime_reports_bound_sandbox_isolation() -> None:
     class Sandbox:
         def get_isolation(self) -> str:

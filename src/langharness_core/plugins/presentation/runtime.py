@@ -18,6 +18,7 @@ from typing import Any
 from pelix.ipopo.decorators import ComponentFactory, Property, Provides, RequiresBest
 
 from langharness_core.contracts import PTCRuntimeProvider, SandboxProvider
+from langharness_core.plugins.exec.runner import build_environment
 
 DEFAULT_TIMEOUT_MS = 120_000
 MAX_TIMEOUT_MS = 600_000
@@ -81,12 +82,17 @@ class NodePTCRuntime:
                 read_only_paths=[command[0], command[-1]],
             )
             isolation = str(self._sandbox.get_isolation())
+        child_env = build_environment(
+            allowlist=("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ")
+        )
+        child_env.update({"HOME": "/nonexistent", "TMPDIR": "/tmp"})
         process = await asyncio.create_subprocess_exec(
             *command,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             start_new_session=True,
+            env=child_env,
         )
         assert process.stdin is not None
         assert process.stdout is not None
