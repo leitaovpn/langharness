@@ -151,6 +151,7 @@ class _GoalAction(BaseModel):
     revision: int
     summary: str
     report_id: str | None
+    review: dict[str, Any] | None = None
 
 
 class _VerificationCheck(BaseModel):

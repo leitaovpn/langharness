@@ -48,7 +48,7 @@ def test_goal_dependencies_are_scoped(tmp_path: Path) -> None:
     from langharness_plugin.scoped_dependencies import scoped_fields
 
     assert scoped_fields(GoalToolsPlugin) == frozenset(
-        {"_goals", "_verifier", "_state"}
+        {"_goals", "_verifier", "_state", "_reviewer"}
     )
 
 
@@ -114,6 +114,59 @@ def test_complete_is_accepted_when_every_gate_passes(tmp_path: Path) -> None:
     stored = instance._goals.get_goal(goal.id)
     assert stored.status == "complete"
     assert stored.acceptance_criteria[0].evidence == "tool:call_1"
+
+
+def test_optional_review_runs_after_gate_and_cannot_grant_completion(tmp_path: Path) -> None:
+    instance = build(tmp_path, failing=True)
+    instance._goals.create_goal("fix it", [{"id": "c1", "text": "tests pass"}])
+    instance._state.record_mutation("a.py", "apply_patch", after_sha256="sha256:x")
+    subjects = []
+
+    class Reviewer:
+        def is_enabled(self):
+            return True
+
+        def review(self, subject):
+            subjects.append(subject)
+            return {"status": "completed", "artifact_id": "review-1",
+                    "completion_authority": "verifier"}
+
+    instance._reviewer = Reviewer()
+    rejected = tools(instance)["finish_goal"].invoke(
+        {"status": "complete", "summary": "done", "evidence": {"c1": "tool:call_1"}}
+    )
+    assert rejected["error"]["code"] == "completion_rejected"
+    assert subjects == []
+
+    instance._verifier._commands = [["python3", "-c", "pass"]]
+    accepted = tools(instance)["finish_goal"].invoke(
+        {"status": "complete", "summary": "done", "evidence": {"c1": "tool:call_1"}}
+    )
+    assert accepted["status"] == "complete"
+    assert accepted["review"]["artifact_id"] == "review-1"
+    assert subjects[0]["goal"]["objective"] == "fix it"
+    assert subjects[0]["verification"]["passed"] is True
+
+
+def test_review_failure_does_not_reverse_verified_completion(tmp_path: Path) -> None:
+    instance = build(tmp_path)
+    goal = instance._goals.create_goal("fix it", [{"id": "c1", "text": "tests pass"}])
+    instance._state.record_mutation("a.py", "apply_patch", after_sha256="sha256:x")
+
+    class BrokenReviewer:
+        def is_enabled(self):
+            return True
+
+        def review(self, subject):
+            raise RuntimeError("review is down")
+
+    instance._reviewer = BrokenReviewer()
+    result = tools(instance)["finish_goal"].invoke(
+        {"status": "complete", "summary": "done", "evidence": {"c1": "tool:call_1"}}
+    )
+    assert result["status"] == "complete"
+    assert result["review"]["status"] == "error"
+    assert instance._goals.get_goal(goal.id).status == "complete"
 
 
 def test_editing_after_verification_blocks_completion(tmp_path: Path) -> None:

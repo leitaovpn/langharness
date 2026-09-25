@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from langharness_core.common.tool_error import tool_error
 from langharness_core.contracts import (
     GoalProvider,
+    ReviewerProvider,
     ToolProvider,
     VerificationProvider,
     WorkspaceStateProvider,
@@ -77,7 +78,8 @@ def _goal_payload(goal: Any) -> dict[str, Any]:
 @RequiresBest("_goals", GoalProvider, optional=True, immediate_rebind=True)
 @RequiresBest("_verifier", VerificationProvider, optional=True, immediate_rebind=True)
 @RequiresBest("_state", WorkspaceStateProvider, optional=True, immediate_rebind=True)
-@ScopedDependencies("_goals", "_verifier", "_state")
+@RequiresBest("_reviewer", ReviewerProvider, optional=True, immediate_rebind=True)
+@ScopedDependencies("_goals", "_verifier", "_state", "_reviewer")
 class GoalToolsPlugin:
     """Exposes the goal to the model, and enforces the completion gate."""
 
@@ -87,10 +89,12 @@ class GoalToolsPlugin:
         self._goals: Any = None
         self._verifier: Any = None
         self._state: Any = None
+        self._reviewer: Any = None
         self._guards: dict[str, ContractGuard] = {
             "_goals": ContractGuard(self, "_goals", GoalProvider),
             "_verifier": ContractGuard(self, "_verifier", VerificationProvider),
             "_state": ContractGuard(self, "_state", WorkspaceStateProvider),
+            "_reviewer": ContractGuard(self, "_reviewer", ReviewerProvider),
         }
 
     @BindField("_goals", if_valid=True)
@@ -115,6 +119,14 @@ class GoalToolsPlugin:
 
     @UnbindField("_state")
     def _on_state_unbind(self, field: str, service: Any, reference: Any) -> None:
+        self._guards[field].release(service)
+
+    @BindField("_reviewer", if_valid=True)
+    def _on_reviewer_bind(self, field: str, service: Any, reference: Any) -> None:
+        self._guards[field].admit(service)
+
+    @UnbindField("_reviewer")
+    def _on_reviewer_unbind(self, field: str, service: Any, reference: Any) -> None:
         self._guards[field].release(service)
 
     def get_plugin_info(self) -> dict[str, str]:
@@ -232,13 +244,42 @@ class GoalToolsPlugin:
         except GoalConflictError as exc:
             return tool_error("goal_revision_mismatch", str(exc), retryable=True)
         self._goals.set_criterion_evidence(updated.id, evidence)
-        return {
+        result = {
             "status": "complete",
             "goal_id": updated.id,
             "revision": updated.revision,
             "report_id": report.id,
             "summary": summary,
         }
+        if self._reviewer is not None and self._reviewer.is_enabled():
+            subject = {
+                "goal": {
+                    "id": updated.id,
+                    "objective": updated.objective,
+                    "revision": updated.revision,
+                    "acceptance_criteria": [
+                        {"id": item.id, "text": item.text, "evidence": item.evidence}
+                        for item in updated.acceptance_criteria
+                    ],
+                },
+                "verification": {
+                    "id": report.id,
+                    "passed": report.passed,
+                    "checks": [
+                        {"name": item.name, "exit_code": item.exit_code}
+                        for item in report.checks
+                    ],
+                    "artifacts": [
+                        {"path": item.path, "sha256": item.sha256}
+                        for item in report.artifacts
+                    ],
+                },
+            }
+            try:
+                result["review"] = self._reviewer.review(subject)
+            except Exception as exc:
+                result["review"] = {"status": "error", "error_type": type(exc).__name__}
+        return result
 
     def _block(self, goal: Any, summary: str, blocker: str | None) -> dict[str, Any]:
         text = (blocker or "").strip()

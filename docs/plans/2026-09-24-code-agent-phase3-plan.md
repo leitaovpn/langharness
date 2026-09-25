@@ -67,9 +67,11 @@
     `status=disabled`。启用后如未绑定模型则返回 `unavailable`；有模型时使用独立消息
     上下文发起审阅，将输出写入 SQLite review artifact（只存 subject SHA-256，不存
     subject 正文），并始终声明 `completion_authority=verifier`。
-  - 证据：`tests/test_reviewer.py`（契约、默认/缺模型行为、假模型调用、持久化 artifact、
-    catalog descriptor）。尚未将 reviewer 接入目标工具链，也没有真实外部 reviewer 模型
-    验证；当前绑定同一 LLM provider 的单独调用不等于独立模型或完整 reviewer agent。
+  - `finish_goal` 现可选绑定 reviewer：确定性 verifier 门禁失败时不触发审阅；门禁通过并
+    持久化完成状态后，单独调用 reviewer，并将结果附于工具输出。审阅异常只产生 review
+    error，不改变完成判定。证据：`tests/test_reviewer.py` 与 `tests/test_goal_tools.py`。
+  - 尚无真实外部 reviewer 模型验证；当前绑定同一 LLM provider 的单独调用不等于独立
+    模型或完整 reviewer agent。审阅发生在完成提交之后，只是附加证据，不是完成门禁。
 - [ ] P3-D1 web/skills/delivery：按 scope 可选装配，声明 schema、权限和 artifact；默认不启用。
 - [ ] P3-E1 failure recovery：跨进程 job/Node 子进程恢复、重试边界、幂等 call id 和取消排空。
   - 已为审批恢复增加事务级单次认领与重复提交门禁；后台 job、PTC 调用及崩溃后审批
