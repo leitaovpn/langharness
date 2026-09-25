@@ -18,13 +18,14 @@ from typing import Any
 from pelix.ipopo.decorators import ComponentFactory, Property, Provides, RequiresBest
 
 from langharness_core.contracts import PTCRuntimeProvider, SandboxProvider
-from langharness_core.plugins.exec.runner import build_environment
+from langharness_core.plugins.exec.runner import build_environment, resource_limiter
 
 DEFAULT_TIMEOUT_MS = 120_000
 MAX_TIMEOUT_MS = 600_000
 MAX_OUTPUT_BYTES = 65_536
 MAX_PROTOCOL_LINE_BYTES = 1_048_576
 KILL_GRACE_SECONDS = 0.5
+PTC_MEMORY_LIMIT_BYTES = 2 * 1024 * 1024 * 1024
 
 
 def _encode_line(payload: Mapping[str, Any]) -> bytes:
@@ -93,6 +94,9 @@ class NodePTCRuntime:
             stderr=asyncio.subprocess.PIPE,
             start_new_session=True,
             env=child_env,
+            preexec_fn=resource_limiter(
+                deadline_ms / 1000, memory_bytes=PTC_MEMORY_LIMIT_BYTES
+            ),
         )
         assert process.stdin is not None
         assert process.stdout is not None

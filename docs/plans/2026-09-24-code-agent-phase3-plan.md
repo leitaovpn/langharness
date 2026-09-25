@@ -54,7 +54,9 @@
   - PTC Node 子进程现传入最小环境白名单，固定 HOME/TMPDIR；真实 Node 回归测试证明
     宿主 `LANG_HARNESS_TEST_SECRET` 不再通过 `process.env` 暴露。注意默认
     `process-only` 仍能访问宿主文件系统，不可把环境过滤当成 OS 沙箱。PTC 子进程的
-    Linux CPU/内存限制及真实 bwrap 验证仍待完成。
+    Linux CPU/内存限制现在接入与 exec 相同的 rlimit hook（内存上限 2 GiB，CPU 按
+    deadline）；本机测试验证启动参数，Linux-only 测试读取子进程 `/proc/self/limits`，
+    但当前 macOS 环境未实际执行该测试。真实 Linux bwrap 验证仍待完成。
 - [ ] P3-C1 reviewer provider：可选 reviewer agent，只产生独立证据，不绕过 verify/finish
   的确定性门禁；缺少 provider 时明确 disabled。
   - 已新增 `ReviewerProvider` 与可选 agent plugin catalog 项；默认 disabled，返回明确

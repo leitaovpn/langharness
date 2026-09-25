@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 from typing import Any, cast
 
@@ -13,8 +14,10 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import StructuredTool
 
 from langharness_core.plugins.loop.agent_loop import PluginAgentLoop
+from langharness_core.plugins.presentation import runtime as runtime_module
 from langharness_core.plugins.presentation.runtime import (
     MAX_OUTPUT_BYTES,
+    PTC_MEMORY_LIMIT_BYTES,
     NodePTCRuntime,
 )
 from langharness_core.plugins.presentation.sdk import render_tool_sdk
@@ -129,6 +132,50 @@ async def test_runtime_does_not_inherit_host_secrets(monkeypatch: pytest.MonkeyP
     )
 
     assert result["result"] == "absent"
+
+
+@pytest.mark.asyncio
+async def test_runtime_passes_deadline_and_memory_limit_to_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    original_spawn = asyncio.create_subprocess_exec
+
+    def fake_limiter(cpu_seconds: float, memory_bytes: int) -> None:
+        captured["cpu_seconds"] = cpu_seconds
+        captured["memory_bytes"] = memory_bytes
+        return None
+
+    async def spawn(*argv: Any, **kwargs: Any) -> Any:
+        captured["has_preexec_fn"] = "preexec_fn" in kwargs
+        return await original_spawn(*argv, **kwargs)
+
+    monkeypatch.setattr(runtime_module, "resource_limiter", fake_limiter, raising=False)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+
+    result = await NodePTCRuntime().execute(
+        code="return 1;", sdk="", dispatch=lambda _name, _args: None,
+        timeout_ms=2000,
+    )
+
+    assert result["result"] == 1
+    assert captured == {
+        "cpu_seconds": 2.0,
+        "memory_bytes": runtime_module.PTC_MEMORY_LIMIT_BYTES,
+        "has_preexec_fn": True,
+    }
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux rlimits only")
+@pytest.mark.asyncio
+async def test_linux_ptc_child_has_address_space_limit() -> None:
+    result = await NodePTCRuntime().execute(
+        code='return (await import("node:fs")).readFileSync("/proc/self/limits", "utf8");',
+        sdk="",
+        dispatch=lambda _name, _args: None,
+    )
+
+    assert str(PTC_MEMORY_LIMIT_BYTES) in result["result"]
 
 
 @pytest.mark.asyncio
