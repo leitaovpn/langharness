@@ -64,9 +64,12 @@
 - [ ] P3-C1 reviewer provider：可选 reviewer agent，只产生独立证据，不绕过 verify/finish
   的确定性门禁；缺少 provider 时明确 disabled。
   - 已新增 `ReviewerProvider` 与可选 agent plugin catalog 项；默认 disabled，返回明确
-    `status=disabled`，即使启用占位实现也只返回独立元数据并声明 `completion_authority=verifier`。
-  - 证据：`tests/test_reviewer.py`（契约、disabled 行为、catalog descriptor）。尚未接入
-    外部 reviewer 模型和持久化 review artifact。
+    `status=disabled`。启用后如未绑定模型则返回 `unavailable`；有模型时使用独立消息
+    上下文发起审阅，将输出写入 SQLite review artifact（只存 subject SHA-256，不存
+    subject 正文），并始终声明 `completion_authority=verifier`。
+  - 证据：`tests/test_reviewer.py`（契约、默认/缺模型行为、假模型调用、持久化 artifact、
+    catalog descriptor）。尚未将 reviewer 接入目标工具链，也没有真实外部 reviewer 模型
+    验证；当前绑定同一 LLM provider 的单独调用不等于独立模型或完整 reviewer agent。
 - [ ] P3-D1 web/skills/delivery：按 scope 可选装配，声明 schema、权限和 artifact；默认不启用。
 - [ ] P3-E1 failure recovery：跨进程 job/Node 子进程恢复、重试边界、幂等 call id 和取消排空。
   - 已为审批恢复增加事务级单次认领与重复提交门禁；后台 job、PTC 调用及崩溃后审批

@@ -325,9 +325,9 @@ AGENT_PLUGIN_DESCRIPTIONS: dict[str, str] = {
         "when the agent is removed."
     ),
     "reviewer": (
-        "Optional independent review evidence provider. It is disabled by default "
+        "Optional model-backed review evidence provider. It is disabled by default "
         "and cannot complete a goal or bypass the project verifier. Properties: "
-        "plugin.reviewer.enabled, plugin.agent_id."
+        "plugin.reviewer.enabled, plugin.reviewer.path, plugin.agent_id."
     ),
     "context-compression": (
         "Optional bounded context middleware. Disabled unless "
