@@ -1,6 +1,6 @@
 # Phase 3 验收矩阵
 
-日期：2026-09-25
+日期：2026-09-27
 
 ## 已通过
 
@@ -14,7 +14,7 @@
 | delivery manifest | `tests/test_delivery_tools.py`、`tests/test_imports.py` | 可选、agent-scoped、只读 SHA-256 manifest；路径/大小/数量边界通过 |
 | 三协议真实 PTC smoke | `docs/evidence/ptc/2026-09-27/` | chat、anthropic、responses 均调用 `run_code` 并返回 5；NDJSON、tool/audit、checkpoint 摘要已保存 |
 | 三协议真实 reviewer smoke | `docs/evidence/ptc/2026-09-27/reviewer-*.json` | 三个 provider 均返回 `completed`；摘要脱敏保存 |
-| 代码质量 | `make check` | 1402 passed、5 skipped，覆盖率 95.29%；Ruff/mypy/Pyright/clean import 通过 |
+| 代码质量 | `make check` | 最近完整门禁 1403 passed、5 skipped，覆盖率 95.23%；Ruff/mypy/Pyright/clean import 通过 |
 
 ## 部分通过或待外部环境
 
