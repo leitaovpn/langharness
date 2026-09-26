@@ -156,6 +156,11 @@ AGENT_PLUGIN_CATALOG: dict[str, tuple[str, str, str]] = {
         "delivery-tools-plugin-factory",
         SPEC_TOOL,
     ),
+    "skills": (
+        "langharness_core.plugins.delivery.skills",
+        "skills-tools-plugin-factory",
+        SPEC_TOOL,
+    ),
 }
 
 DEFAULT_AGENT_PLUGINS: tuple[str, ...] = ("tools", "name")
@@ -338,6 +343,9 @@ AGENT_PLUGIN_DESCRIPTIONS: dict[str, str] = {
         "Optional read-only delivery manifest for explicit workspace files. "
         "Declares workspace-read permission and SHA-256 artifact metadata; "
         "not included in default presets."
+    ),
+    "skills": (
+        "Optional read-only inventory of workspace SKILL.md files. It never executes or fetches skill content."
     ),
     "context-compression": (
         "Optional bounded context middleware. Disabled unless "

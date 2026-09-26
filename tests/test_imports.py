@@ -73,6 +73,7 @@ PUBLIC_MODULES = [
     "langharness_core.plugins.goals.tools",
     "langharness_core.plugins.verifier.project",
     "langharness_core.plugins.delivery.manifest",
+    "langharness_core.plugins.delivery.skills",
     "langharness_core.plugins.exec.runner",
     "langharness_core.plugins.exec.jobs",
     "langharness_core.plugins.exec.tools",

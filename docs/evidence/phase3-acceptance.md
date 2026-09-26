@@ -21,7 +21,7 @@
 | 三协议真实 PTC smoke | `docs/evidence/ptc/2026-09-25/` | chat/anthropic 为 HTTP 403，responses 为空流；没有成功 `run_code`、artifact 或 checkpoint 证据 |
 | 三协议 reviewer smoke | `docs/evidence/ptc/2026-09-24-reviewer/` | 实际调用返回 error；没有成功 reviewer artifact |
 | Linux bwrap | sandbox 单元测试 | 当前主机为 macOS，Docker daemon 未运行；没有真实 Linux namespace 验证 |
-| web/skills/delivery | `tests/test_delivery_tools.py`、Phase 3 计划 P3-D1 | delivery 的只读 manifest 切片已实现；web/skills provider 与发布后端仍未实现 |
+| web/skills/delivery | `tests/test_delivery_tools.py`、Phase 3 计划 P3-D1 | delivery manifest 与只读 `list_skills` inventory 已实现；web provider、技能执行/安装后端和发布后端仍未实现 |
 | 跨进程恢复 | Phase 3 计划 P3-E1/E3 | job/PTC 子进程恢复、崩溃后已认领审批的处置策略、goal/checkpoint 联合恢复仍缺证据 |
 
 ## 验收判定
