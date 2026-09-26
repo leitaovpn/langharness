@@ -78,6 +78,11 @@
     Anthropic 证据摘要见 `docs/evidence/ptc/2026-09-24-reviewer/`，因此没有成功
     reviewer 证据。
 - [ ] P3-D1 web/skills/delivery：按 scope 可选装配，声明 schema、权限和 artifact；默认不启用。
+  - 已实现 delivery 的最小安全切片：可选 agent plugin `delivery` 暴露只读
+    `delivery_manifest(paths)`，显式声明 `workspace-read` 权限和 `sha256-manifest`
+    artifact；路径经过 workspace containment 校验，限制 32 个文件和单文件 100 MiB，
+    不上传、不联网、不打包。默认 presets 不启用。证据：`tests/test_delivery_tools.py`、
+    `tests/test_imports.py`。web/skills provider 与真正的发布后端仍未实现。
 - [ ] P3-E1 failure recovery：跨进程 job/Node 子进程恢复、重试边界、幂等 call id 和取消排空。
   - 已为审批恢复增加事务级单次认领与重复提交门禁；后台 job、PTC 调用及崩溃后审批
     决策的恢复策略仍未完成。

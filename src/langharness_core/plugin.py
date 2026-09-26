@@ -151,6 +151,11 @@ AGENT_PLUGIN_CATALOG: dict[str, tuple[str, str, str]] = {
         "audit-plugin-factory",
         SPEC_AUDIT,
     ),
+    "delivery": (
+        "langharness_core.plugins.delivery.manifest",
+        "delivery-tools-plugin-factory",
+        SPEC_TOOL,
+    ),
 }
 
 DEFAULT_AGENT_PLUGINS: tuple[str, ...] = ("tools", "name")
@@ -328,6 +333,11 @@ AGENT_PLUGIN_DESCRIPTIONS: dict[str, str] = {
         "Optional model-backed review evidence provider. It is disabled by default "
         "and cannot complete a goal or bypass the project verifier. Properties: "
         "plugin.reviewer.enabled, plugin.reviewer.path, plugin.agent_id."
+    ),
+    "delivery": (
+        "Optional read-only delivery manifest for explicit workspace files. "
+        "Declares workspace-read permission and SHA-256 artifact metadata; "
+        "not included in default presets."
     ),
     "context-compression": (
         "Optional bounded context middleware. Disabled unless "
