@@ -1,0 +1,1 @@
+{"protocol": "anthropic", "tool_calls": ["run_code"], "audit_results": [5], "answer": "5", "errors": [], "tool_outputs": ["{\"logs\": [], \"result\": 5, \"isolation\": \"process-only\", \"duration_ms\": 90}"], "checkpoint": {"message_count": 4, "message_types": ["HumanMessage", "AIMessage", "ToolMessage", "AIMessage"], "tool_call_names": ["run_code"]}}

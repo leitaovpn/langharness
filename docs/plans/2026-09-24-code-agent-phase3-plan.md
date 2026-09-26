@@ -77,6 +77,8 @@
     `deepseek-v4-flash`、`claude-fable5`、`chatgpt-5` 的实际调用均返回 `status=error`。
     Anthropic 证据摘要见 `docs/evidence/ptc/2026-09-24-reviewer/`，因此没有成功
     reviewer 证据。
+  - 2026-09-27 复测：三协议 reviewer smoke 全部成功，脱敏状态摘要见
+    `docs/evidence/ptc/2026-09-27/reviewer-*.json`。
 - [ ] P3-D1 web/skills/delivery：按 scope 可选装配，声明 schema、权限和 artifact；默认不启用。
   - 已实现 delivery 的最小安全切片：可选 agent plugin `delivery` 暴露只读
     `delivery_manifest(paths)`，显式声明 `workspace-read` 权限和 `sha256-manifest`
@@ -118,7 +120,7 @@
     联合恢复及完成状态幂等的端到端证据。
   - 已加终态不可重开与 mutation generation 不回退约束；重启后的已完成 goal 不会
     重新成为 active，见 `tests/test_goal_store.py`。尚未完成 checkpoint 联合恢复。
-- [ ] P3-F1 real provider smoke：设置 `LANG_HARNESS_REAL_LLM_PROVIDER`、密钥和 protocol，
+- [x] P3-F1 real provider smoke：设置 `LANG_HARNESS_REAL_LLM_PROVIDER`、密钥和 protocol，
   对 chat/anthropic/responses 各执行一轮；保存原始 NDJSON、artifact、checkpoint 摘要。
   - `tests/test_ptc_real_provider.py` 使用本地 provider 配置运行真实 PTC `run_code` 调用，
     将无密钥的摘要写入 pytest 临时目录。2026-09-23：`deepseek-v4-flash`（chat）
@@ -131,6 +133,9 @@
     当前 chat 与 anthropic 均在模型调用阶段返回 HTTP 403（免费额度耗尽），responses
     返回 `ValueError: No generations found in stream`，均未进入 `run_code`，本轮无成功
     artifact/checkpoint。此前 2026-09-23 两协议成功记录不能替代当前三协议验收。
+  - 2026-09-27 复测：chat、anthropic、responses 三协议均执行 `run_code` 并返回 5；
+    原始 NDJSON、脱敏摘要和 checkpoint/tool 摘要见
+    `docs/evidence/ptc/2026-09-27/`。本轮三协议真实 PTC 验收通过。
   - 2026-09-25 复测：三个协议仍未进入 `run_code`。chat/anthropic 在模型调用阶段返回
     HTTP 403（额度耗尽）；responses 返回空流。脱敏失败摘要和 NDJSON 保存在
     `docs/evidence/ptc/2026-09-25/`，这些是失败诊断而非成功验收证据。

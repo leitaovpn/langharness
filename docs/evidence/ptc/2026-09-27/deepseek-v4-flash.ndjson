@@ -1,0 +1,6 @@
+{"type": "tool_call", "name": "run_code", "tool_call_id": "call_0cc3c6b0496b46658cb1b919", "args": {"code": "return await tools.add({a: 2, b: 3});", "description": "Add 2 and 3 using tools.add"}}
+{"type": "ptc_audit", "sequence": 1, "root_call_id": "ptc-8803a2c90c61434a87b288bb7ba22f55", "parent_call_id": "ptc-8803a2c90c61434a87b288bb7ba22f55", "call_id": "ptc-8803a2c90c61434a87b288bb7ba22f55/1", "name": "add", "args": {"a": 2, "b": 3}, "status": "started", "agent_id": "", "session_id": "ptc-real-5346194e30d9457c90eaed0eef6ad42d"}
+{"type": "ptc_audit", "sequence": 2, "root_call_id": "ptc-8803a2c90c61434a87b288bb7ba22f55", "parent_call_id": "ptc-8803a2c90c61434a87b288bb7ba22f55", "call_id": "ptc-8803a2c90c61434a87b288bb7ba22f55/1", "name": "add", "args": {"a": 2, "b": 3}, "status": "completed", "result": 5, "duration_ms": 1, "agent_id": "", "session_id": "ptc-real-5346194e30d9457c90eaed0eef6ad42d"}
+{"type": "tool_output", "name": "run_code", "tool_call_id": "call_0cc3c6b0496b46658cb1b919", "output": "{\"logs\": [], \"result\": 5, \"isolation\": \"process-only\", \"duration_ms\": 84}"}
+{"type": "assistant", "content": "5"}
+{"type": "usage", "input_tokens": 1094, "output_tokens": 222, "total_tokens": 1316}
