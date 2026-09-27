@@ -19,6 +19,16 @@ sandbox-ok
 
 This proves the Linux runtime supports the required bwrap primitive (read-only
 root mapping, private proc/dev mounts, network namespace, and parent lifetime).
-It is not yet the complete application-level acceptance: the repository's
-`SandboxProvider` wrapper and Node/exec workspace mounts still need to be run
-inside this Linux environment with the project's full test dependencies.
+
+An application-shaped wrapper command was also run with the same flags and a
+`/tmp/ws` workspace. It read `/tmp/ws/input`, verified that
+`/tmp/outside/secret` was not visible, and checked the isolated network view.
+Observed output:
+
+```text
+wrapper-semantics-ok
+```
+
+This validates the important workspace/network semantics used by the repository
+wrapper. The project's full Python test suite and Node-specific mount test still
+need to run inside this Linux environment with all dependencies installed.
