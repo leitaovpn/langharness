@@ -21,7 +21,7 @@
 | 项目 | 当前证据 | 缺口 |
 | --- | --- | --- |
 | 历史失败 smoke | `docs/evidence/ptc/2026-09-25/`、`docs/evidence/ptc/2026-09-24-reviewer/` | 保留 403/空流/error 诊断；已被 2026-09-27 成功复测取代 |
-| Linux bwrap | sandbox 单元测试 | 当前主机为 macOS，Docker daemon 未运行；没有真实 Linux namespace 验证 |
+| Linux bwrap | `docs/evidence/linux-bwrap-2026-09-27.md`、sandbox 单元测试 | Docker Linux 容器内 `bubblewrap 0.8.0` 原语 smoke 已通过；应用级 wrapper、workspace mount 和资源限制仍需在该环境运行 |
 | web/skills/delivery | `tests/test_delivery_tools.py`、Phase 3 计划 P3-D1 | delivery manifest 与只读 `list_skills` inventory 已实现；web provider、技能执行/安装后端和发布后端仍未实现 |
 | 跨进程恢复 | `test_audit_round_trip_across_independent_processes`；Phase 3 计划 P3-E1/E3 | audit 独立进程读写已验证；job/PTC 子进程恢复、崩溃后已认领审批的处置策略、goal/checkpoint 联合恢复仍缺证据 |
 
