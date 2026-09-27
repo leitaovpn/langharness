@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -31,6 +33,33 @@ def test_audit_events_round_trip_and_preserve_sequence(tmp_path: Path) -> None:
 
     assert asyncio.run(scenario()) == events
     plugin._invalidate(cast(Any, None))
+
+
+def test_audit_round_trip_across_independent_processes(tmp_path: Path) -> None:
+    path = tmp_path / "cross-process-audit.sqlite3"
+    script = """
+import asyncio, json, sys
+from langharness_core.plugins.sessions.audit import SQLiteAuditPlugin
+
+async def main():
+    plugin = SQLiteAuditPlugin()
+    plugin._path = sys.argv[1]
+    if sys.argv[2] == 'write':
+        await plugin.append_events([{'root_call_id': 'cross', 'sequence': 1, 'status': 'ok'}])
+    else:
+        print(json.dumps(await plugin.list_events('cross')))
+    plugin._invalidate(None)
+
+asyncio.run(main())
+"""
+    subprocess.run([sys.executable, "-c", script, str(path), "write"], check=True)
+    read = subprocess.run(
+        [sys.executable, "-c", script, str(path), "read"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert read.stdout.strip() == '[{"root_call_id": "cross", "sequence": 1, "status": "ok"}]'
 
 
 def test_audit_events_can_be_queried_by_agent_and_session(tmp_path: Path) -> None:

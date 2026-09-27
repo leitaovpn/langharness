@@ -40,6 +40,9 @@
     使用真实 Node PTC 执行与 SQLite 查询验证。
   - 待完成：真实跨进程 agent/checkpoint 恢复时的审计事件关联验证，以及崩溃后已认领
     决策的处置/重试语义。
+  - 新增独立 Python 进程写入后由另一独立进程读取 SQLite audit 的回归测试，证明
+    append-only audit 不依赖进程内连接复用；见
+    `tests/test_audit_persistence.py::test_audit_round_trip_across_independent_processes`。
   - 审批认领与 `decision_submitted` 现在在 SQLite `BEGIN IMMEDIATE` 事务内原子完成；
     两个独立连接同时认领仅有一个成功，重复恢复在进入图执行前拒绝。见
     `tests/test_audit_persistence.py`。崩溃后已提交但未 `decision_applied` 的请求仍需人工
