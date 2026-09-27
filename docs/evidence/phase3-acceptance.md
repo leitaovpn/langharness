@@ -7,7 +7,7 @@
 | 项目 | 证据 | 结论 |
 | --- | --- | --- |
 | PTC/exec 环境与资源边界 | `tests/test_ptc_runtime.py`、`tests/test_exec_runner.py`、`tests/test_job_manager.py` | PTC 环境白名单、超时、输出上限和 Linux rlimit 接入通过；Linux 实测项在 macOS 跳过 |
-| 审计持久化 | `tests/test_audit_persistence.py` | SQLite round-trip、重开、agent/session 隔离、工具/job/审批元数据通过 |
+| 审计持久化 | `tests/test_audit_persistence.py` | SQLite round-trip、重开、独立进程读写、agent/session 隔离、工具/job/审批元数据通过 |
 | 审批恢复幂等 | `tests/test_audit_persistence.py::test_only_one_concurrent_resume_can_claim_an_approval` | 两个连接并发认领仅一个成功，重复恢复在图执行前拒绝 |
 | 上下文压缩 | `tests/test_context_compression.py`、`tests/test_context_checkpoint.py` | 控制证据保护、工具调用/结果成组保留、SQLite checkpoint 重开通过 |
 | reviewer 门禁顺序 | `tests/test_goal_tools.py`、`tests/test_reviewer.py` | verifier 是唯一完成权；reviewer 只产生附加 artifact，故障不撤销完成 |
@@ -23,7 +23,7 @@
 | 历史失败 smoke | `docs/evidence/ptc/2026-09-25/`、`docs/evidence/ptc/2026-09-24-reviewer/` | 保留 403/空流/error 诊断；已被 2026-09-27 成功复测取代 |
 | Linux bwrap | sandbox 单元测试 | 当前主机为 macOS，Docker daemon 未运行；没有真实 Linux namespace 验证 |
 | web/skills/delivery | `tests/test_delivery_tools.py`、Phase 3 计划 P3-D1 | delivery manifest 与只读 `list_skills` inventory 已实现；web provider、技能执行/安装后端和发布后端仍未实现 |
-| 跨进程恢复 | Phase 3 计划 P3-E1/E3 | job/PTC 子进程恢复、崩溃后已认领审批的处置策略、goal/checkpoint 联合恢复仍缺证据 |
+| 跨进程恢复 | `test_audit_round_trip_across_independent_processes`；Phase 3 计划 P3-E1/E3 | audit 独立进程读写已验证；job/PTC 子进程恢复、崩溃后已认领审批的处置策略、goal/checkpoint 联合恢复仍缺证据 |
 
 ## 验收判定
 
