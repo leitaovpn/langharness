@@ -46,3 +46,14 @@ returned an error-shaped result instead of `result` (timeouts also returned a
 `RangeError`), so this is a Node bootstrap/runtime compatibility failure, not
 evidence of a sandbox bypass. A follow-up diagnostic rerun was interrupted by
 the Debian mirror returning HTTP 503. Full Linux PTC acceptance remains open.
+
+An isolated Node 22 protocol check was also run against the repository's
+`node_bootstrap.mjs`, both with and without `--experimental-strip-types`:
+
+```text
+{"type":"done","result":1,"logs":[]}
+```
+
+Therefore the remaining failure is specifically in the Python
+`NodePTCRuntime` integration/environment (the test result payload was
+error-shaped), not in the bootstrap protocol or bwrap namespace primitive.
