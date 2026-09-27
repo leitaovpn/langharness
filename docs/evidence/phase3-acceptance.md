@@ -27,9 +27,11 @@
 
 ## 验收判定
 
-当前不能将 Phase 3 或真实外部模型验证标记为完成。完成所需的缺失条件是：
+真实外部模型验证已完成：2026-09-27 三个协议均成功执行 `run_code` 并保存
+脱敏 NDJSON、artifact、tool/audit 和 checkpoint 摘要；三个 reviewer smoke 也均
+返回 `completed`。Phase 3 整体仍为进行中，尚缺以下条件：
 
-1. 至少一个可用 provider 对 chat、anthropic、responses 各成功执行 `run_code`，并保存脱敏 NDJSON、artifact 和 checkpoint 摘要；
-2. 在真实 Linux 环境执行 bwrap namespace、网络隔离、路径边界和资源限制测试；
-3. 实现并验收 web/skills/delivery 的按 scope 可选装配；
-4. 完成跨进程 job/PTC/goal 恢复及崩溃重试边界。
+1. 在真实 Linux 环境执行 bwrap namespace、网络隔离、路径边界和资源限制测试；
+2. 实现并验收 web provider、skills 执行/安装后端和 delivery 发布后端的按 scope 可选装配；
+3. 完成跨进程 job/PTC/goal 恢复及崩溃重试边界；
+4. 补齐 token 预算、结构化控制证据识别、异常消息历史策略及更广泛的 checkpoint/stream 验证。

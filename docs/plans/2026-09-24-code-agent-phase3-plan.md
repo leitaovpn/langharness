@@ -70,8 +70,8 @@
   - `finish_goal` 现可选绑定 reviewer：确定性 verifier 门禁失败时不触发审阅；门禁通过并
     持久化完成状态后，单独调用 reviewer，并将结果附于工具输出。审阅异常只产生 review
     error，不改变完成判定。证据：`tests/test_reviewer.py` 与 `tests/test_goal_tools.py`。
-  - 尚无真实外部 reviewer 模型验证；当前绑定同一 LLM provider 的单独调用不等于独立
-    模型或完整 reviewer agent。审阅发生在完成提交之后，只是附加证据，不是完成门禁。
+  - 当前绑定同一 LLM provider 的单独调用不等于独立模型或完整 reviewer agent。审阅发生
+    在完成提交之后，只是附加证据，不是完成门禁。
   - 新增 opt-in `tests/test_reviewer.py::test_real_reviewer_smoke`，使用
     `LANG_HARNESS_REAL_LLM_PROVIDER` 并只写脱敏状态摘要；2026-09-24 对
     `deepseek-v4-flash`、`claude-fable5`、`chatgpt-5` 的实际调用均返回 `status=error`。
@@ -141,9 +141,10 @@
     `docs/evidence/ptc/2026-09-25/`，这些是失败诊断而非成功验收证据。
 - [ ] P3-F2 final gate：P3 全部完成后运行 `make check`，覆盖率至少 95%，并完成真实 provider
   smoke 报告。
-  - 当前中途门禁：2026-09-24 `make check` 通过；Ruff、mypy、Pyright、clean-process
-    import、`1385 passed, 3 skipped`，总覆盖率 `95.36%`。3 个跳过项包括尚未纳入
-    默认门禁的真实模型 smoke；这不是 Phase 3 最终验收。
+  - 当前中途门禁：2026-09-27 `make check` 通过；Ruff、mypy、Pyright、clean-process
+    import、`1403 passed, 5 skipped`，总覆盖率 `95.23%`。真实模型 smoke 为 opt-in，
+    但三协议成功证据已单独保存在 `docs/evidence/ptc/2026-09-27/`；Phase 3 仍因
+    Linux bwrap、完整扩展后端和跨进程恢复缺口不能最终验收。
 
 ## 当前环境证据
 
