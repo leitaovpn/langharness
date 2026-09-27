@@ -117,7 +117,10 @@
   - 已增强结构化控制证据识别：优先识别 `type/status` 的 goal、verification、audit、
     approval 事件，同时保留旧文本标记兼容；见
     `tests/test_context_compression.py::test_structured_control_evidence_is_preserved_without_text_marker`。
-  - 待完成：更广泛的 checkpoint/stream 语义验证；
+  - 已补充真实 `create_agent` 的 `astream(stream_mode="updates")` 回归测试，验证压缩
+    后的流式更新仍写入 SQLite checkpoint；见
+    `tests/test_context_checkpoint.py::test_compressed_history_stream_updates_checkpoint`。
+  - 待完成：跨协议、多工具调用等更广泛的 checkpoint/stream 语义验证；
     现有测试仍主要覆盖单线程 round-trip 场景。
 - [ ] P3-E3 cross-process goal resume：从 SQLite checkpoint 恢复 agent/session/goal 状态，
   防止重复完成和 revision 回退。

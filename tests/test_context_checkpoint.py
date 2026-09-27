@@ -75,3 +75,38 @@ def test_compressed_history_survives_sqlite_reopen(tmp_path: Path) -> None:
     assert "goal: keep this" in contents
     assert "new turn" in contents
     assert not any("old unrelated" in content for content in contents)
+
+
+def test_compressed_history_stream_updates_checkpoint(tmp_path: Path) -> None:
+    path = str(tmp_path / "stream-checkpoint.sqlite3")
+    middleware = ContextCompressionMiddlewarePlugin()
+    middleware._budget_bytes = 900
+    plugin = SQLiteCheckpointerPlugin()
+    plugin._path = path
+
+    async def run() -> tuple[list[Any], list[str]]:
+        graph = create_agent(
+            AnswerModel(), tools=[], middleware=middleware.get_middlewares(),
+            checkpointer=plugin.get_checkpointer(),
+        )
+        config: RunnableConfig = {"configurable": {"thread_id": "stream-thread"}}
+        chunks: list[Any] = []
+        async for chunk in graph.astream(
+            {"messages": [HumanMessage(content="goal: stream this")]},
+            config,
+            stream_mode="updates",
+        ):
+            chunks.append(chunk)
+        tuple_ = await plugin.get_checkpointer().aget_tuple(config)
+        assert tuple_ is not None
+        contents = [
+            str(message.content)
+            for message in tuple_.checkpoint["channel_values"]["messages"]
+        ]
+        assert plugin._connection is not None
+        await plugin._connection.close()
+        return chunks, contents
+
+    chunks, contents = asyncio.run(run())
+    assert chunks
+    assert "goal: stream this" in contents
