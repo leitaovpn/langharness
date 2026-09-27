@@ -57,3 +57,18 @@ An isolated Node 22 protocol check was also run against the repository's
 Therefore the remaining failure is specifically in the Python
 `NodePTCRuntime` integration/environment (the test result payload was
 error-shaped), not in the bootstrap protocol or bwrap namespace primitive.
+
+A controlled diagnostic isolated the resource-limit interaction. In the same
+Node 22 container and with the same `NodePTCRuntime` code, replacing only
+`resource_limiter` with a no-op produced:
+
+```text
+{'logs': [], 'result': 1, 'isolation': 'process-only', ...}
+```
+
+The normal limiter produces `RangeError: WebAssembly.Instance(): Out of
+memory: Cannot allocate Wasm memory for new instance`. This proves the failure
+is caused by the address-space limit colliding with Node's TypeScript-strip
+WASM initialization. The limiter must not simply be removed; the remaining
+implementation work is to initialize/transform before applying the limit or
+use a non-WASM TypeScript path.
