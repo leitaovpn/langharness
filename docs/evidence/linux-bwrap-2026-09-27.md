@@ -30,5 +30,19 @@ wrapper-semantics-ok
 ```
 
 This validates the important workspace/network semantics used by the repository
-wrapper. The project's full Python test suite and Node-specific mount test still
-need to run inside this Linux environment with all dependencies installed.
+wrapper.
+
+## Linux project-test attempt
+
+Using a Node 22 Debian container, the project test subset was executed after
+installing the project runtime dependencies:
+
+```text
+29 passed, 14 failed
+```
+
+The sandbox/exec cases passed. The failing cases were PTC runtime cases: they
+returned an error-shaped result instead of `result` (timeouts also returned a
+`RangeError`), so this is a Node bootstrap/runtime compatibility failure, not
+evidence of a sandbox bypass. A follow-up diagnostic rerun was interrupted by
+the Debian mirror returning HTTP 503. Full Linux PTC acceptance remains open.
