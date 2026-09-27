@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 from typing import Any
 
 from langchain_core.tools import StructuredTool
@@ -26,6 +27,11 @@ from langharness_plugin.validation import ContractGuard
 
 
 class SkillsArgs(BaseModel):
+    root: str = Field(default=".codex/skills", min_length=1)
+
+
+class SkillContentArgs(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
     root: str = Field(default=".codex/skills", min_length=1)
 
 
@@ -61,6 +67,12 @@ class SkillsToolsPlugin:
             description="List workspace skill metadata; never execute or fetch skill content.",
             args_schema=SkillsArgs,
             metadata={"permission": "workspace-read", "artifact": "skill-manifest"},
+        ), StructuredTool.from_function(
+            func=self._read_skill,
+            name="read_skill",
+            description="Read a bounded workspace SKILL.md; never execute or fetch content.",
+            args_schema=SkillContentArgs,
+            metadata={"permission": "workspace-read", "artifact": "skill-content"},
         )]
 
     def _list_skills(self, root: str = ".codex/skills") -> dict[str, Any]:
@@ -83,8 +95,27 @@ class SkillsToolsPlugin:
             })
         return {"skills": skills, "permission": "workspace-read"}
 
+    def _read_skill(self, name: str, root: str = ".codex/skills") -> dict[str, Any]:
+        if Path(name).name != name or Path(name).is_absolute():
+            return {"error": {"code": "invalid_skill", "message": "skill name must be a single directory name"}}
+        try:
+            target = resolve_workspace_path(
+                self._workspace.get_workspace(), f"{root}/{name}/SKILL.md"
+            )
+        except WorkspacePathError as exc:
+            return {"error": {"code": exc.code, "message": exc.message}}
+        if not target.is_file:
+            return {"error": {"code": "path_not_found", "message": f"skill {name!r} is missing"}}
+        raw = target.absolute.read_bytes()
+        if len(raw) > 256 * 1024:
+            return {"error": {"code": "too_large", "message": "SKILL.md exceeds 256 KiB"}}
+        return {"name": name, "path": target.relative,
+                "content": raw.decode("utf-8", errors="replace"),
+                "size_bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest(),
+                "permission": "workspace-read"}
+
     def get_tool_presentations(self) -> dict[str, str]:
-        return {"list_skills": "list_skills({root})"}
+        return {"list_skills": "list_skills({root})", "read_skill": "read_skill({name, root})"}
 
     def get_plugin_info(self) -> dict[str, str]:
         return {"name": self._plugin_name, "version": self._plugin_version}

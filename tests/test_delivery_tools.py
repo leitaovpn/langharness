@@ -56,3 +56,16 @@ def test_skills_inventory_is_read_only_and_hashes_skill_markers(tmp_path: Path) 
     assert result["permission"] == "workspace-read"
     assert result["skills"][0]["name"] == "demo"
     assert result["skills"][0]["sha256"] == hashlib.sha256(b"# Demo").hexdigest()
+
+
+def test_read_skill_is_bounded_and_workspace_scoped(tmp_path: Path) -> None:
+    marker = tmp_path / ".codex" / "skills" / "demo" / "SKILL.md"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("# Demo", encoding="utf-8")
+    plugin = SkillsToolsPlugin()
+    plugin._workspace = SimpleNamespace(get_workspace=lambda: str(tmp_path))
+    tool = {item.name: item for item in plugin.get_tools()}["read_skill"]
+    result = tool.invoke({"name": "demo"})
+    assert result["content"] == "# Demo"
+    assert result["permission"] == "workspace-read"
+    assert tool.invoke({"name": str(tmp_path.parent / "outside")})["error"]["code"] == "invalid_skill"

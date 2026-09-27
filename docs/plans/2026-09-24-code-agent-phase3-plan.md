@@ -86,8 +86,9 @@
     不上传、不联网、不打包。默认 presets 不启用。证据：`tests/test_delivery_tools.py`、
     `tests/test_imports.py`。web/skills provider 与真正的发布后端仍未实现。
   - 新增可选 `skills` agent plugin：只扫描 workspace 下显式 `SKILL.md` 标记文件，返回
-    名称、相对路径和 SHA-256，声明 `workspace-read`，不执行内容、不联网。证据：
-    `tests/test_delivery_tools.py`。完整 skills 运行时/安装后端仍未实现。
+    名称、相对路径和 SHA-256，声明 `workspace-read`，不执行内容、不联网；现在还提供
+    受单目录名约束、256 KiB 上限和哈希回传的 `read_skill`，作为安全的执行前读取边界。
+    证据：`tests/test_delivery_tools.py`。skills 执行/安装后端仍未实现。
 - [ ] P3-E1 failure recovery：跨进程 job/Node 子进程恢复、重试边界、幂等 call id 和取消排空。
   - 已为审批恢复增加事务级单次认领与重复提交门禁；后台 job、PTC 调用及崩溃后审批
     决策的恢复策略仍未完成。
