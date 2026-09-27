@@ -114,7 +114,10 @@
   - 已新增无外部 tokenizer 依赖的保守 token 预算入口 `compress_messages_tokens` 与
     `estimate_tokens`（按 UTF-8 四字节上界换算），并覆盖非法预算测试；调用方仍可继续
     使用原有字节预算 API。
-  - 待完成：结构化控制证据识别，以及更广泛的 checkpoint/stream 语义验证；
+  - 已增强结构化控制证据识别：优先识别 `type/status` 的 goal、verification、audit、
+    approval 事件，同时保留旧文本标记兼容；见
+    `tests/test_context_compression.py::test_structured_control_evidence_is_preserved_without_text_marker`。
+  - 待完成：更广泛的 checkpoint/stream 语义验证；
     现有测试仍主要覆盖单线程 round-trip 场景。
 - [ ] P3-E3 cross-process goal resume：从 SQLite checkpoint 恢复 agent/session/goal 状态，
   防止重复完成和 revision 回退。

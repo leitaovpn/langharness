@@ -44,6 +44,18 @@ def test_token_budget_uses_conservative_estimate() -> None:
         compress_messages_tokens(messages, budget_tokens=0)
 
 
+def test_structured_control_evidence_is_preserved_without_text_marker() -> None:
+    evidence = {
+        "role": "tool",
+        "type": "verification_report",
+        "status": "verified",
+        "content": "ok",
+    }
+    old = {"role": "user", "content": "x" * 300}
+    result = compress_messages([old, evidence], budget_bytes=180)
+    assert evidence in result
+
+
 def test_control_evidence_cannot_be_silently_dropped() -> None:
     messages = [{"role": "tool", "content": "approval unfinished: " + "x" * 200}]
     with pytest.raises(ValueError, match="control evidence"):

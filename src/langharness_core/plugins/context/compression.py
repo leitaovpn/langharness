@@ -49,6 +49,32 @@ def _field(message: Any, name: str) -> Any:
     return getattr(message, name, None)
 
 
+def _is_control_evidence(message: Any) -> bool:
+    """Recognize structured audit/goal evidence before legacy text markers."""
+    kind = _field(message, "type")
+    status = _field(message, "status")
+    if isinstance(kind, str) and kind in {
+        "goal",
+        "goal_status",
+        "verification",
+        "verification_report",
+        "audit",
+        "approval_audit",
+    }:
+        return True
+    if isinstance(status, str) and status in {
+        "unfinished",
+        "required",
+        "decision_submitted",
+        "decision_applied",
+        "verified",
+    }:
+        return True
+    return any(
+        marker in _content(message).lower() for marker in PRESERVED_MARKERS
+    )
+
+
 def _tool_groups(source: list[Any]) -> list[list[int]]:
     """Group an assistant call and all of its matching tool results atomically."""
     parent = list(range(len(source)))
@@ -98,11 +124,7 @@ def compress_messages(
     marked = [
         group
         for group in groups
-        if any(
-            marker in _content(source[index]).lower()
-            for index in group
-            for marker in PRESERVED_MARKERS
-        )
+        if any(_is_control_evidence(source[index]) for index in group)
     ]
     selected: set[int] = set()
     used = 0
