@@ -9,6 +9,8 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langharness_core.plugins.context.compression import (
     ContextCompressionTransformer,
     compress_messages,
+    compress_messages_tokens,
+    estimate_tokens,
 )
 
 
@@ -32,6 +34,14 @@ def test_compression_preserves_control_evidence_and_newest_messages() -> None:
 def test_compression_rejects_invalid_budget() -> None:
     with pytest.raises(ValueError, match="positive"):
         compress_messages([], budget_bytes=0)
+
+
+def test_token_budget_uses_conservative_estimate() -> None:
+    messages = [{"role": "user", "content": "goal: preserve"}]
+    assert estimate_tokens("abcd") == 1
+    assert compress_messages_tokens(messages, budget_tokens=100) == messages
+    with pytest.raises(ValueError, match="budget_tokens"):
+        compress_messages_tokens(messages, budget_tokens=0)
 
 
 def test_control_evidence_cannot_be_silently_dropped() -> None:

@@ -15,6 +15,20 @@ PRESERVED_MARKERS = (
 )
 
 
+def estimate_tokens(value: Any) -> int:
+    """Estimate tokens conservatively without requiring a model tokenizer.
+
+    Four UTF-8 bytes is a deliberately conservative approximation for ordinary
+    text.  The estimate is only used to enforce an upper bound; providers may
+    report a smaller or larger exact count independently.
+    """
+    if isinstance(value, (str, bytes)):
+        raw = value if isinstance(value, bytes) else value.encode("utf-8")
+    else:
+        raw = json.dumps(value, ensure_ascii=False, default=str).encode("utf-8")
+    return max(1, (len(raw) + 3) // 4)
+
+
 def _content(message: Any) -> str:
     if isinstance(message, Mapping):
         return str(message.get("content", ""))
@@ -104,6 +118,18 @@ def compress_messages(
         selected.update(group)
         used += size
     return [source[index] for index in sorted(selected)]
+
+
+def compress_messages_tokens(
+    messages: Iterable[Any], *, budget_tokens: int
+) -> list[Any]:
+    """Compress messages under a dependency-free approximate token budget."""
+    if budget_tokens < 1:
+        raise ValueError("budget_tokens must be positive")
+    source = list(messages)
+    # Reuse the byte-budget algorithm while accounting with the same
+    # conservative four-bytes-per-token bound used by ``estimate_tokens``.
+    return compress_messages(source, budget_bytes=budget_tokens * 4)
 
 
 class ContextCompressionTransformer:

@@ -111,7 +111,10 @@
   - 已补充异常历史策略：压缩遇到没有匹配 assistant tool call 的孤立 tool result
     立即拒绝，避免静默保留或丢弃损坏的工具历史；见
     `tests/test_context_compression.py::test_compression_rejects_orphan_tool_result`。
-  - 待完成：token 预算、结构化控制证据识别，以及更广泛的 checkpoint/stream 语义验证；
+  - 已新增无外部 tokenizer 依赖的保守 token 预算入口 `compress_messages_tokens` 与
+    `estimate_tokens`（按 UTF-8 四字节上界换算），并覆盖非法预算测试；调用方仍可继续
+    使用原有字节预算 API。
+  - 待完成：结构化控制证据识别，以及更广泛的 checkpoint/stream 语义验证；
     现有测试仍主要覆盖单线程 round-trip 场景。
 - [ ] P3-E3 cross-process goal resume：从 SQLite checkpoint 恢复 agent/session/goal 状态，
   防止重复完成和 revision 回退。
