@@ -54,6 +54,14 @@ def _tool_groups(source: list[Any]) -> list[list[int]]:
             call_id = _field(call, "id")
             if isinstance(call_id, str) and call_id:
                 owners[call_id] = index
+    orphan_results = [
+        index
+        for index, message in enumerate(source)
+        if isinstance(_field(message, "tool_call_id"), str)
+        and _field(message, "tool_call_id") not in owners
+    ]
+    if orphan_results:
+        raise ValueError("context contains a tool result without a matching call")
     for index, message in enumerate(source):
         call_id = _field(message, "tool_call_id")
         if isinstance(call_id, str) and call_id in owners:

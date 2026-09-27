@@ -59,6 +59,14 @@ def test_compression_does_not_keep_tool_result_without_its_call() -> None:
     assert compress_messages([call, result], budget_bytes=result_size) == []
 
 
+def test_compression_rejects_orphan_tool_result() -> None:
+    with pytest.raises(ValueError, match="without a matching call"):
+        compress_messages(
+            [{"role": "tool", "content": "stale", "tool_call_id": "missing"}],
+            budget_bytes=1000,
+        )
+
+
 def test_marked_tool_result_requires_room_for_its_call() -> None:
     call = AIMessage(
         content="",

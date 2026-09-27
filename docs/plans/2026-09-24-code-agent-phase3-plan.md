@@ -108,8 +108,11 @@
   - 已按 `tool_call_id` 将 AI 调用与全部匹配的工具结果作为不可拆分的组，预算不足时整体
     跳过；控制证据所在组预算不足时拒绝压缩。`tests/test_context_compression.py` 覆盖真实
     LangChain 消息和多调用字典消息。
-  - 待完成：token 预算、结构化控制证据识别、缺失调用/结果的异常历史策略，以及更广泛的
-    checkpoint/stream 语义验证；现有测试仅证明上述单线程 round-trip 场景。
+  - 已补充异常历史策略：压缩遇到没有匹配 assistant tool call 的孤立 tool result
+    立即拒绝，避免静默保留或丢弃损坏的工具历史；见
+    `tests/test_context_compression.py::test_compression_rejects_orphan_tool_result`。
+  - 待完成：token 预算、结构化控制证据识别，以及更广泛的 checkpoint/stream 语义验证；
+    现有测试仍主要覆盖单线程 round-trip 场景。
 - [ ] P3-E3 cross-process goal resume：从 SQLite checkpoint 恢复 agent/session/goal 状态，
   防止重复完成和 revision 回退。
   - 已补 goal SQLite 的 `agent_id` 隔离和数据库级 revision CAS；同一数据库内两个
