@@ -1,3 +1,4 @@
+# pyright: reportUnsupportedDunderAll=false
 """Concrete plugin implementations, resolved lazily."""
 
 from importlib import import_module
