@@ -222,23 +222,34 @@ async def test_child_can_catch_a_failed_host_call() -> None:
 @pytest.mark.asyncio
 async def test_program_can_run_independent_host_calls_concurrently() -> None:
     runtime = NodePTCRuntime()
+    entered = 0
+    both_entered = asyncio.Event()
+    release = asyncio.Event()
 
     async def dispatch(_name: str, args: Any) -> Any:
-        await asyncio.sleep(0.12)
+        nonlocal entered
+        entered += 1
+        if entered == 2:
+            both_entered.set()
+        await both_entered.wait()
+        await release.wait()
         return args["value"]
 
-    started = asyncio.get_running_loop().time()
-    result = await runtime.execute(
-        code=(
-            "const values = await Promise.all(["
-            "tools.wait({value: 1}), tools.wait({value: 2})]); return values;"
-        ),
-        sdk="",
-        dispatch=dispatch,
+    task = asyncio.create_task(
+        runtime.execute(
+            code=(
+                "const values = await Promise.all(["
+                "tools.wait({value: 1}), tools.wait({value: 2})]); return values;"
+            ),
+            sdk="",
+            dispatch=dispatch,
+        )
     )
-
+    await asyncio.wait_for(both_entered.wait(), timeout=1)
+    assert entered == 2
+    release.set()
+    result = await task
     assert result["result"] == [1, 2]
-    assert asyncio.get_running_loop().time() - started < 0.22
 
 
 @pytest.mark.asyncio
@@ -488,8 +499,40 @@ async def test_ptc_scope_switch_changes_sdk_and_dispatch_target() -> None:
 
 @pytest.mark.asyncio
 async def test_loop_serializes_writes_but_allows_read_only_calls() -> None:
-    reads = _async_tool("read", read_only=True)
-    writes = _async_tool("write", read_only=False)
+    read_entered = 0
+    both_reads_entered = asyncio.Event()
+    release_reads = asyncio.Event()
+    first_write_started = asyncio.Event()
+    release_first_write = asyncio.Event()
+    second_write_started = asyncio.Event()
+
+    async def read(value: int) -> int:
+        nonlocal read_entered
+        read_entered += 1
+        if read_entered == 2:
+            both_reads_entered.set()
+        await both_reads_entered.wait()
+        await release_reads.wait()
+        return value
+
+    write_count = 0
+
+    async def write(value: int) -> int:
+        nonlocal write_count
+        write_count += 1
+        if write_count == 1:
+            first_write_started.set()
+            await release_first_write.wait()
+        else:
+            second_write_started.set()
+        return value
+
+    reads = StructuredTool.from_function(
+        coroutine=read, name="read", description="Read", metadata={"read_only": True}
+    )
+    writes = StructuredTool.from_function(
+        coroutine=write, name="write", description="Write", metadata={"read_only": False}
+    )
 
     class Provider:
         def get_tools(self) -> list[Any]:
@@ -500,19 +543,29 @@ async def test_loop_serializes_writes_but_allows_read_only_calls() -> None:
     loop._presentation_provider = _Mode("ptc")
     loop._ptc_runtime = NodePTCRuntime()
 
-    read_start = asyncio.get_running_loop().time()
-    result = await loop._run_code(
-        "return await Promise.all([tools.read({value: 1}), tools.read({value: 2})]);"
+    read_task = asyncio.create_task(
+        loop._run_code(
+            "return await Promise.all([tools.read({value: 1}), tools.read({value: 2})]);"
+        )
     )
+    await asyncio.wait_for(both_reads_entered.wait(), timeout=1)
+    assert read_entered == 2
+    release_reads.set()
+    result = await read_task
     assert result["result"] == [1, 2]
-    assert asyncio.get_running_loop().time() - read_start < 0.19
 
-    write_start = asyncio.get_running_loop().time()
-    result = await loop._run_code(
-        "return await Promise.all([tools.write({value: 1}), tools.write({value: 2})]);"
+    write_task = asyncio.create_task(
+        loop._run_code(
+            "return await Promise.all([tools.write({value: 1}), tools.write({value: 2})]);"
+        )
     )
+    await asyncio.wait_for(first_write_started.wait(), timeout=1)
+    await asyncio.sleep(0)
+    assert not second_write_started.is_set()
+    release_first_write.set()
+    result = await write_task
     assert result["result"] == [1, 2]
-    assert asyncio.get_running_loop().time() - write_start >= 0.19
+    assert second_write_started.is_set()
 
 
 @pytest.mark.asyncio
