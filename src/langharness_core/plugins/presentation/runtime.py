@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import signal
+import sys
 import time
 import uuid
 from collections.abc import Callable, Mapping
@@ -26,6 +27,9 @@ MAX_OUTPUT_BYTES = 65_536
 MAX_PROTOCOL_LINE_BYTES = 1_048_576
 KILL_GRACE_SECONDS = 0.5
 PTC_MEMORY_LIMIT_BYTES = 2 * 1024 * 1024 * 1024
+_BOOTSTRAP_PATH = str(
+    files("langharness_core.plugins.presentation").joinpath("node_bootstrap.mjs")
+)
 
 
 def _encode_line(payload: Mapping[str, Any]) -> bytes:
@@ -63,11 +67,7 @@ class NodePTCRuntime:
         if timeout_ms <= 0:
             raise ValueError("PTC timeout_ms must be positive")
         deadline_ms = min(int(timeout_ms), MAX_TIMEOUT_MS)
-        bootstrap = str(
-            files("langharness_core.plugins.presentation").joinpath(
-                "node_bootstrap.mjs"
-            )
-        )
+        bootstrap = _BOOTSTRAP_PATH
         started = time.monotonic()
         command = ["node", bootstrap]
         isolation = "process-only"
@@ -92,7 +92,7 @@ class NodePTCRuntime:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,
+            start_new_session=sys.platform.startswith("linux"),
             env=child_env,
             preexec_fn=resource_limiter(
                 deadline_ms / 1000, memory_bytes=PTC_MEMORY_LIMIT_BYTES
@@ -274,15 +274,16 @@ class NodePTCRuntime:
     async def _terminate(self, process: asyncio.subprocess.Process) -> None:
         if process.returncode is not None:
             return
+        kill = os.killpg if sys.platform.startswith("linux") else os.kill
         try:
-            os.killpg(process.pid, signal.SIGTERM)
+            kill(process.pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
         try:
             await asyncio.wait_for(process.wait(), timeout=KILL_GRACE_SECONDS)
         except TimeoutError:
             try:
-                os.killpg(process.pid, signal.SIGKILL)
+                kill(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
             await process.wait()
