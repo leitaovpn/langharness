@@ -84,3 +84,14 @@ The bootstrap was then run in Node 22 with a 2 GiB virtual-address limit:
 The request contained `const value: number = 1` and a declaration-only SDK.
 This succeeds because the new narrow runtime transform does not initialize
 Node's WASM TypeScript compiler.
+
+The complete tool-call round trip was also exercised under the same 2 GiB
+address-space limit: Node emitted `tool_call(add, {a: 2, b: 3})`, Python sent
+back `tool_result=5`, and Node returned:
+
+```text
+{'type': 'done', 'result': 5, 'logs': []}
+```
+
+This verifies the Linux PTC protocol path, including host dispatch, rather
+than only a no-tool expression.
