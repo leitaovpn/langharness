@@ -1,5 +1,4 @@
 import readline from "node:readline";
-import { stripTypeScriptTypes } from "node:module";
 
 const input = readline.createInterface({ input: process.stdin });
 const pending = new Map();
@@ -42,6 +41,17 @@ function callTool(name, args) {
   return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
 }
 
+// The SDK is declaration-only and is intentionally not evaluated.  Keep the
+// runtime transform dependency-free: Node's stripTypeScriptTypes uses a WASM
+// compiler which cannot initialize after the PTC address-space limit is set.
+// This narrow transform covers the generated PTC syntax (variable/parameter
+// annotations and `as` assertions) without touching object-literal colons.
+function stripRuntimeTypes(source) {
+  return source
+    .replace(/([A-Za-z_$][\w$]*)\s*:\s*[A-Za-z_$][\w$]*(?=\s*[=;,)])/g, "$1")
+    .replace(/\s+as\s+[A-Za-z_$][\w$]*(?=\s*[,;)\]}])/g, "");
+}
+
 async function execute() {
   const logs = [];
   const tools = new Proxy(Object.create(null), {
@@ -57,12 +67,7 @@ async function execute() {
     error: (...values) => logs.push(values.map(String).join(" ")),
   };
   try {
-    const body = stripTypeScriptTypes(
-      `async function __ptc(tools, console) {\n${request.sdk}\n${request.code}\n}`,
-      {
-      mode: "strip",
-      },
-    );
+    const body = `async function __ptc(tools, console) {\n${stripRuntimeTypes(request.code)}\n}`;
     const run = new Function(`${body}; return __ptc;`)();
     const result = await run(tools, safeConsole);
     send({ type: "done", result, logs });
