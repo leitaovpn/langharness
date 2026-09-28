@@ -277,7 +277,7 @@ async def test_timeout_audits_pending_child_as_cancelled() -> None:
         code="await tools.wait({});",
         sdk="",
         dispatch=dispatch,
-        timeout_ms=100,
+        timeout_ms=1_000,
     )
 
     assert result["error"]["name"] == "TimeoutError"
