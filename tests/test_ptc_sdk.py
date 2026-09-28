@@ -1,0 +1,154 @@
+"""Typed SDK generation from scoped LangChain tools."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+from pydantic import BaseModel, Field
+
+from langharness_core.plugins.exec.tools import ExecToolsPlugin
+from langharness_core.plugins.goals.ask_user import AskUserToolPlugin
+from langharness_core.plugins.goals.tools import GoalToolsPlugin
+from langharness_core.plugins.goals.verify_tool import VerifyToolPlugin
+from langharness_core.plugins.presentation.sdk import render_tool_sdk
+from langharness_core.plugins.tools.code_workspace import CodeWorkspaceToolsPlugin
+from langharness_core.plugins.workspace.root import WorkspaceRootPlugin
+
+
+class ReadArgs(BaseModel):
+    path: str
+    start_line: int = 1
+
+
+class SearchOptions(BaseModel):
+    case_sensitive: bool = False
+
+
+class SearchArgs(BaseModel):
+    pattern: str
+    options: SearchOptions = Field(default_factory=SearchOptions)
+
+
+def tool(
+    name: str, schema: type[BaseModel], output: dict[str, Any] | None = None
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        name=name,
+        tool_call_schema=schema,
+        metadata={"output_schema": output} if output else {},
+    )
+
+
+def test_sdk_is_stable_sorted_and_never_exposes_run_code() -> None:
+    read = tool("read_file", ReadArgs)
+    search = tool("search_text", SearchArgs)
+    run_code = tool("run_code", ReadArgs)
+
+    first = render_tool_sdk([search, run_code, read])
+    second = render_tool_sdk([read, search])
+
+    assert first == second
+    assert '"run_code"' not in first
+    assert first.index('"read_file"') < first.index('"search_text"')
+    assert '"path": string' in first
+    assert '"start_line"?: number' in first
+    assert '"case_sensitive"?: boolean' in first
+    assert '"read_file": unknown' in first
+
+
+def test_sdk_uses_declared_output_schema_without_guessing() -> None:
+    read = tool(
+        "read_file",
+        ReadArgs,
+        {
+            "type": "object",
+            "required": ["content"],
+            "properties": {
+                "content": {"type": "string"},
+                "truncated": {"type": "boolean"},
+            },
+        },
+    )
+
+    sdk = render_tool_sdk([read])
+
+    assert '"read_file": { "content": string; "truncated"?: boolean; }' in sdk
+    assert "Promise<ToolOutputMap[K]>" in sdk
+
+
+def test_sdk_changes_with_scope_visible_tools() -> None:
+    alpha = render_tool_sdk([tool("read_file", ReadArgs)])
+    beta = render_tool_sdk([tool("search_text", SearchArgs)])
+
+    assert '"read_file"' in alpha and '"search_text"' not in alpha
+    assert '"search_text"' in beta and '"read_file"' not in beta
+
+
+def test_nested_schema_and_union_render_without_losing_required_fields() -> None:
+    sdk = render_tool_sdk([tool("search_text", SearchArgs)])
+    assert '"pattern": string' in sdk
+    assert '"options"?: { "case_sensitive"?: boolean; }' in sdk
+
+
+def test_duplicate_names_are_rejected_before_a_schema_can_be_shadowed() -> None:
+    with pytest.raises(ValueError, match="Duplicate SDK tool: read_file"):
+        render_tool_sdk([tool("read_file", ReadArgs), tool("read_file", SearchArgs)])
+
+
+def test_unsupported_output_schema_remains_unknown() -> None:
+    sdk = render_tool_sdk(
+        [tool("read_file", ReadArgs, {"$ref": "#/missing/definition"})]
+    )
+    assert '"read_file": unknown' in sdk
+
+
+def test_builtin_workspace_sdk_describes_success_and_error_results(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceRootPlugin()
+    workspace._root = str(tmp_path)
+    provider = CodeWorkspaceToolsPlugin()
+    provider._workspace = workspace
+
+    sdk = render_tool_sdk(provider.get_tools())
+
+    assert '"read_file": unknown' not in sdk
+    assert '"text": string' in sdk
+    assert '"sha256": string' in sdk
+    assert '"matches": Array<' in sdk
+    assert '"error": {' in sdk
+
+
+def test_builtin_exec_sdk_describes_foreground_background_and_errors() -> None:
+    provider = ExecToolsPlugin()
+    provider._workspace = object()
+    provider._jobs = object()
+
+    sdk = render_tool_sdk(provider.get_tools())
+
+    assert '"exec_command": unknown' not in sdk
+    assert '"exit_code": number' in sdk
+    assert '"job_id": string' in sdk
+    assert '"error": {' in sdk
+
+
+def test_builtin_goal_sdk_describes_goal_and_verification_results() -> None:
+    goals = GoalToolsPlugin()
+    goals._goals = object()
+    goals._verifier = object()
+    verifier = VerifyToolPlugin()
+    verifier._goals = object()
+    verifier._verifier = object()
+    ask = AskUserToolPlugin()
+    ask._goals = object()
+
+    sdk = render_tool_sdk([*goals.get_tools(), *verifier.get_tools(), *ask.get_tools()])
+
+    for name in ("get_goal", "finish_goal", "verify", "ask_user"):
+        assert f'"{name}": unknown' not in sdk
+    assert '"objective": string' in sdk
+    assert '"would_complete": boolean' in sdk
+    assert '"question": string' in sdk

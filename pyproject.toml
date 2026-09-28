@@ -61,6 +61,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 langharness_config = ["config/langharness.toml"]
+langharness_core = ["prompts/code_agent/*.md", "plugins/presentation/*.mjs"]
 
 [tool.ruff]
 target-version = "py313"

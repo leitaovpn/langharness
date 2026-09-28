@@ -4,18 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Iterator
+import uuid
+from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import contextmanager
-from typing import Any
+from contextvars import ContextVar
+from pathlib import Path
+from typing import Any, cast
 
 from langchain.agents import create_agent
 from langchain_core.messages import ToolMessage
+from langchain_core.tools import StructuredTool
 from langgraph.types import Command
 from pelix.ipopo.decorators import (
     BindField,
     ComponentFactory,
     HiddenProperty,
     Invalidate,
+    Property,
     Provides,
     Requires,
     RequiresBest,
@@ -23,23 +28,47 @@ from pelix.ipopo.decorators import (
     Validate,
 )
 
-from langharness_core.contracts import (
+from langharness_core.contracts import (  # noqa: I001 - grouped with the block above
     AgentLoopProvider,
+    AuditProvider,
+    AwaitUser,
     CacheProvider,
     CheckpointerProvider,
     ContextSchemaProvider,
+    Continue,
     DebugProvider,
     InterruptAfterProvider,
     InterruptBeforeProvider,
+    JobManagerProvider,
     LLMProvider,
     MiddlewareProvider,
     NameProvider,
+    PromptSection,
+    PromptSectionProvider,
+    PTCRuntimeProvider,
     ResponseFormatProvider,
+    RunControllerProvider,
+    RunDecision,
     StateSchemaProvider,
+    Stop,
     StoreProvider,
     SystemPromptProvider,
+    ToolPresentationProvider,
     ToolProvider,
     TransformersProvider,
+    WorkspaceProvider,
+)
+from langharness_core.plugins.presentation.scheduler import PTCDispatchGate
+from langharness_core.plugins.presentation.sdk import render_tool_sdk
+from langharness_core.plugins.prompts.context import (
+    build_prompt_context,
+    model_display_name,
+)
+from langharness_core.plugins.prompts.legacy import legacy_sections
+from langharness_core.plugins.prompts.middleware import PromptMiddleware
+from langharness_core.plugins.prompts.sections import (
+    AssembledPrompt,
+    assemble_sections,
 )
 from langharness_plugin.scope_policy import (
     resolve_scoped_aggregate,
@@ -49,6 +78,12 @@ from langharness_plugin.scoped_dependencies import ScopedDependencies
 from langharness_plugin.validation import ContractGuard
 
 LOGGER = logging.getLogger("langharness.agent")
+PTC_AUDIT_EVENTS: ContextVar[list[dict[str, Any]] | None] = ContextVar(
+    "ptc_audit_events", default=None
+)
+PTC_AUDIT_SESSION: ContextVar[str | None] = ContextVar(
+    "ptc_audit_session", default=None
+)
 
 
 def _extract_usage(message: Any) -> dict[str, int] | None:
@@ -120,11 +155,32 @@ def _iter_interrupts(container: Any) -> Iterator[Any]:
 @ComponentFactory("agent-loop-factory")
 @Provides(AgentLoopProvider)
 @HiddenProperty("_scope_chain", "plugin.scope_chain", None)
+@Property("_agent_id", "plugin.agent_id", "")
 @RequiresBest("_llm_provider", LLMProvider, optional=False, immediate_rebind=True)
 @Requires("_scoped_llm_providers", LLMProvider, aggregate=True, optional=True)
 @Requires("_tool_providers", ToolProvider, aggregate=True, optional=True)
+@RequiresBest(
+    "_presentation_provider",
+    ToolPresentationProvider,
+    optional=True,
+    immediate_rebind=True,
+)
+@RequiresBest("_ptc_runtime", PTCRuntimeProvider, optional=True, immediate_rebind=True)
+@RequiresBest("_audit_provider", AuditProvider, optional=True, immediate_rebind=True)
 @Requires("_middleware_providers", MiddlewareProvider, aggregate=True, optional=True)
-@Requires("_system_prompt_providers", SystemPromptProvider, aggregate=True, optional=True)
+@Requires(
+    "_system_prompt_providers", SystemPromptProvider, aggregate=True, optional=True
+)
+@Requires(
+    "_prompt_section_providers", PromptSectionProvider, aggregate=True, optional=True
+)
+@RequiresBest(
+    "_workspace_provider", WorkspaceProvider, optional=True, immediate_rebind=True
+)
+@RequiresBest("_job_manager", JobManagerProvider, optional=True, immediate_rebind=True)
+@RequiresBest(
+    "_run_controller", RunControllerProvider, optional=True, immediate_rebind=True
+)
 @RequiresBest(
     "_response_format_provider",
     ResponseFormatProvider,
@@ -175,8 +231,15 @@ def _iter_interrupts(container: Any) -> Iterator[Any]:
     "_llm_provider",
     "_scoped_llm_providers",
     "_tool_providers",
+    "_presentation_provider",
+    "_ptc_runtime",
+    "_audit_provider",
     "_middleware_providers",
     "_system_prompt_providers",
+    "_prompt_section_providers",
+    "_workspace_provider",
+    "_job_manager",
+    "_run_controller",
     "_name_provider",
     "_response_format_provider",
     "_cache_provider",
@@ -189,12 +252,20 @@ class PluginAgentLoop:
 
     def __init__(self) -> None:
         self._scope_chain: list[str] = []
+        self._agent_id = ""
         self._service_metadata: dict[int, tuple[str, str, int]] = {}
         self._llm_provider: Any = None
         self._scoped_llm_providers: list[Any] = []
         self._tool_providers: list[Any] = []
+        self._presentation_provider: Any = None
+        self._ptc_runtime: Any = None
+        self._audit_provider: Any = None
         self._middleware_providers: list[Any] = []
         self._system_prompt_providers: list[Any] = []
+        self._prompt_section_providers: list[Any] = []
+        self._workspace_provider: Any = None
+        self._job_manager: Any = None
+        self._run_controller: Any = None
         self._response_format_provider: Any = None
         self._state_schema_provider: Any = None
         self._context_schema_provider: Any = None
@@ -212,11 +283,26 @@ class PluginAgentLoop:
                 self, "_scoped_llm_providers", LLMProvider
             ),
             "_tool_providers": ContractGuard(self, "_tool_providers", ToolProvider),
+            "_presentation_provider": ContractGuard(
+                self, "_presentation_provider", ToolPresentationProvider
+            ),
+            "_ptc_runtime": ContractGuard(self, "_ptc_runtime", PTCRuntimeProvider),
+            "_audit_provider": ContractGuard(self, "_audit_provider", AuditProvider),
             "_middleware_providers": ContractGuard(
                 self, "_middleware_providers", MiddlewareProvider
             ),
             "_system_prompt_providers": ContractGuard(
                 self, "_system_prompt_providers", SystemPromptProvider
+            ),
+            "_prompt_section_providers": ContractGuard(
+                self, "_prompt_section_providers", PromptSectionProvider
+            ),
+            "_workspace_provider": ContractGuard(
+                self, "_workspace_provider", WorkspaceProvider
+            ),
+            "_job_manager": ContractGuard(self, "_job_manager", JobManagerProvider),
+            "_run_controller": ContractGuard(
+                self, "_run_controller", RunControllerProvider
             ),
             "_response_format_provider": ContractGuard(
                 self, "_response_format_provider", ResponseFormatProvider
@@ -327,9 +413,7 @@ class PluginAgentLoop:
         self._rebuild()
 
     @UnbindField("_scoped_llm_providers", if_valid=True)
-    def _on_scoped_llm_unbind(
-        self, field: str, service: Any, reference: Any
-    ) -> None:
+    def _on_scoped_llm_unbind(self, field: str, service: Any, reference: Any) -> None:
         with self._excluding_service(service):
             self._guards[field].release(service)
             self._forget_service(service)
@@ -372,20 +456,107 @@ class PluginAgentLoop:
         self._rebuild()
 
     @UnbindField("_system_prompt_providers", if_valid=True)
-    def _on_system_prompt_unbind(self, field: str, service: Any, reference: Any) -> None:
+    def _on_system_prompt_unbind(
+        self, field: str, service: Any, reference: Any
+    ) -> None:
         with self._excluding_service(service):
             self._guards[field].release(service)
             self._forget_service(service)
             self._rebuild()
 
+    @BindField("_prompt_section_providers", if_valid=True)
+    def _on_prompt_section_bind(self, field: str, service: Any, reference: Any) -> None:
+        if not self._guards[field].admit(service):
+            return
+        self._remember_service(service, reference)
+        self._rebuild()
+
+    @UnbindField("_prompt_section_providers", if_valid=True)
+    def _on_prompt_section_unbind(
+        self, field: str, service: Any, reference: Any
+    ) -> None:
+        with self._excluding_service(service):
+            self._guards[field].release(service)
+            self._forget_service(service)
+            self._rebuild()
+
+    @BindField("_workspace_provider", if_valid=True)
+    def _on_workspace_bind(self, field: str, service: Any, reference: Any) -> None:
+        if not self._guards[field].admit(service):
+            return
+        self._rebuild()
+
+    @UnbindField("_workspace_provider")
+    def _on_workspace_unbind(self, field: str, service: Any, reference: Any) -> None:
+        self._guards[field].release(service)
+        self._graph = None
+
+    @BindField("_presentation_provider", if_valid=True)
+    def _on_presentation_bind(self, field: str, service: Any, reference: Any) -> None:
+        if not self._guards[field].admit(service):
+            return
+        self._rebuild()
+
+    @UnbindField("_presentation_provider")
+    def _on_presentation_unbind(self, field: str, service: Any, reference: Any) -> None:
+        self._guards[field].release(service)
+        self._graph = None
+
+    @BindField("_ptc_runtime", if_valid=True)
+    def _on_ptc_runtime_bind(self, field: str, service: Any, reference: Any) -> None:
+        if not self._guards[field].admit(service):
+            return
+        self._rebuild()
+
+    @UnbindField("_ptc_runtime")
+    def _on_ptc_runtime_unbind(self, field: str, service: Any, reference: Any) -> None:
+        self._guards[field].release(service)
+        self._graph = None
+
+    @BindField("_audit_provider", if_valid=True)
+    def _on_audit_bind(self, field: str, service: Any, reference: Any) -> None:
+        self._guards[field].admit(service)
+
+    @UnbindField("_audit_provider")
+    def _on_audit_unbind(self, field: str, service: Any, reference: Any) -> None:
+        self._guards[field].release(service)
+
+    @BindField("_job_manager", if_valid=True)
+    def _on_job_manager_bind(self, field: str, service: Any, reference: Any) -> None:
+        if not self._guards[field].admit(service):
+            return
+        self._rebuild()
+
+    @UnbindField("_job_manager")
+    def _on_job_manager_unbind(self, field: str, service: Any, reference: Any) -> None:
+        self._guards[field].release(service)
+        self._graph = None
+
+    @BindField("_run_controller", if_valid=True)
+    def _on_run_controller_bind(self, field: str, service: Any, reference: Any) -> None:
+        if not self._guards[field].admit(service):
+            return
+        self._rebuild()
+
+    @UnbindField("_run_controller")
+    def _on_run_controller_unbind(
+        self, field: str, service: Any, reference: Any
+    ) -> None:
+        self._guards[field].release(service)
+        self._graph = None
+
     @BindField("_response_format_provider", if_valid=True)
-    def _on_response_format_bind(self, field: str, service: Any, reference: Any) -> None:
+    def _on_response_format_bind(
+        self, field: str, service: Any, reference: Any
+    ) -> None:
         if not self._guards[field].admit(service):
             return
         self._rebuild()
 
     @UnbindField("_response_format_provider")
-    def _on_response_format_unbind(self, field: str, service: Any, reference: Any) -> None:
+    def _on_response_format_unbind(
+        self, field: str, service: Any, reference: Any
+    ) -> None:
         self._guards[field].release(service)
         self._graph = None
 
@@ -407,7 +578,9 @@ class PluginAgentLoop:
         self._rebuild()
 
     @UnbindField("_context_schema_provider")
-    def _on_context_schema_unbind(self, field: str, service: Any, reference: Any) -> None:
+    def _on_context_schema_unbind(
+        self, field: str, service: Any, reference: Any
+    ) -> None:
         self._guards[field].release(service)
         self._graph = None
 
@@ -434,7 +607,9 @@ class PluginAgentLoop:
         self._graph = None
 
     @BindField("_interrupt_before_providers", if_valid=True)
-    def _on_interrupt_before_bind(self, field: str, service: Any, reference: Any) -> None:
+    def _on_interrupt_before_bind(
+        self, field: str, service: Any, reference: Any
+    ) -> None:
         if not self._guards[field].admit(service):
             return
         self._remember_service(service, reference)
@@ -450,7 +625,9 @@ class PluginAgentLoop:
             self._rebuild()
 
     @BindField("_interrupt_after_providers", if_valid=True)
-    def _on_interrupt_after_bind(self, field: str, service: Any, reference: Any) -> None:
+    def _on_interrupt_after_bind(
+        self, field: str, service: Any, reference: Any
+    ) -> None:
         if not self._guards[field].admit(service):
             return
         self._remember_service(service, reference)
@@ -506,9 +683,7 @@ class PluginAgentLoop:
         self._rebuild()
 
     @UnbindField("_transformers_providers", if_valid=True)
-    def _on_transformers_unbind(
-        self, field: str, service: Any, reference: Any
-    ) -> None:
+    def _on_transformers_unbind(self, field: str, service: Any, reference: Any) -> None:
         with self._excluding_service(service):
             self._guards[field].release(service)
             self._forget_service(service)
@@ -518,7 +693,82 @@ class PluginAgentLoop:
         tools: list[Any] = []
         for provider in self._effective(self._tool_providers):
             tools.extend(provider.get_tools())
+        mode = self._presentation_mode()
+        if mode == "native":
+            return tools
+        if self._ptc_runtime is None:
+            raise RuntimeError("PTC runtime is required for this presentation mode")
+        run_code = StructuredTool.from_function(
+            coroutine=self._run_code,
+            name="run_code",
+            description=(
+                "Run TypeScript code to call the tools declared in the program SDK. "
+                "Return only the program result and explicit logs."
+            ),
+        )
+        return [run_code] if mode == "ptc" else [*tools, run_code]
+
+    async def _run_code(
+        self, code: str, description: str = "", timeout_ms: int = 120_000
+    ) -> dict[str, Any]:
+        del description
+        tools = {
+            str(getattr(tool, "name")): tool
+            for tool in self._collect_native_tools()
+            if getattr(tool, "name", None) != "run_code"
+        }
+        dispatch_gate = PTCDispatchGate(max_readers=4)
+
+        def is_read_only(tool: Any) -> bool:
+            metadata = getattr(tool, "metadata", None)
+            if not isinstance(metadata, Mapping):
+                return False
+            return bool(metadata.get("read_only", False))
+
+        async def dispatch(name: str, args: Any) -> Any:
+            tool = tools.get(name)
+            if tool is None:
+                raise ValueError(f"Tool {name!r} is not available in this scope")
+            if not isinstance(args, Mapping):
+                raise TypeError("Tool arguments must be an object")
+            async with dispatch_gate.acquire(read_only=is_read_only(tool)):
+                return await tool.ainvoke(dict(args))
+
+        result = cast(
+            dict[str, Any],
+            await self._ptc_runtime.execute(
+            code=code,
+            sdk=render_tool_sdk(tools.values()),
+            dispatch=dispatch,
+            timeout_ms=timeout_ms,
+            ),
+        )
+        # Audit entries stay host-side; exposing them in the model tool result
+        # would leak intermediate sub-call arguments and values.
+        audit = result.pop("audit", [])
+        collector = PTC_AUDIT_EVENTS.get()
+        if collector is not None:
+            collector.extend(audit)
+        elif self._audit_provider is not None and audit:
+            await self._audit_provider.append_events(
+                [self._scope_audit(event, PTC_AUDIT_SESSION.get()) for event in audit]
+            )
+        return result
+
+    def _collect_native_tools(self) -> list[Any]:
+        tools: list[Any] = []
+        for provider in self._effective(self._tool_providers):
+            tools.extend(provider.get_tools())
         return tools
+
+    def _presentation_mode(self) -> str:
+        if self._presentation_provider is None:
+            return "native"
+        return str(self._presentation_provider.get_mode())
+
+    def _require_available_presentation(self) -> None:
+        if self._presentation_mode() != "native" and self._ptc_runtime is None:
+            raise RuntimeError("PTC runtime is not available for this agent")
 
     def _collect_middlewares(self) -> list[Any]:
         middlewares: list[Any] = []
@@ -526,15 +776,100 @@ class PluginAgentLoop:
             middlewares.extend(provider.get_middlewares())
         return middlewares
 
-    def _collect_system_prompt(self) -> str | None:
-        parts = [
-            provider.get_system_prompt()
-            for provider in self._effective(self._system_prompt_providers)
-        ]
-        parts = [part for part in parts if part]
-        if not parts:
+    def _decide(self, rounds_run: int) -> RunDecision | None:
+        """Ask the controller what to do now that the graph has gone quiet.
+
+        Returns ``None`` when no controller is bound — the plain-agent path,
+        where one graph run is the whole turn. A controller that raises must
+        not kill the stream: the run stops and the failure is logged.
+        """
+        if self._run_controller is None:
             return None
-        return "\n".join(parts)
+        try:
+            decision: RunDecision = self._run_controller.decide(
+                rounds_run=rounds_run,
+                checkpointer_available=self._checkpointer_provider is not None,
+            )
+            return decision
+        except Exception:
+            LOGGER.exception("Run controller failed; stopping the run")
+            return Stop(
+                status="active",
+                reason="controller-error",
+                wrapup="The run controller failed; stopping here.",
+            )
+
+    def _drain_job_events(self) -> list[dict[str, Any]]:
+        """Take whatever background-job events have queued up.
+
+        Drained between graph chunks rather than concurrently: output from a
+        long-running job surfaces on the next chunk, not the instant it is
+        produced. That is a deliberate trade of immediacy for a stream that
+        stays a single, testable iterator.
+        """
+        if self._job_manager is None:
+            return []
+        try:
+            return list(self._job_manager.drain_events())
+        except Exception:
+            LOGGER.exception("Job event drain failed; continuing without events")
+            return []
+
+    def _workspace_root(self) -> str:
+        """The realpath every path-taking plugin resolves against."""
+        if self._workspace_provider is not None:
+            return str(self._workspace_provider.get_workspace())
+        return str(Path.cwd())
+
+    def _model_name(self) -> str | None:
+        if self._llm_provider is None:
+            return None
+        return model_display_name(self._llm_provider.get_model())
+
+    def _prompt_for_request(self, state: Mapping[str, Any]) -> AssembledPrompt:
+        """Assemble the system prompt for one model step.
+
+        A failing section provider must not abort the model call: its section is
+        dropped, the failure is logged, and the remaining sections still reach
+        the model.  Prompt assembly runs on the request path, so degrading beats
+        propagating.
+        """
+        workspace = self._workspace_root()
+        context = build_prompt_context(
+            workspace=workspace,
+            messages=state.get("messages") or (),
+            model=self._model_name(),
+        )
+        sections: list[PromptSection] = list(
+            legacy_sections(self._effective(self._system_prompt_providers))
+        )
+        for provider in self._effective(self._prompt_section_providers):
+            try:
+                sections.extend(provider.get_prompt_sections(context))
+            except Exception:
+                LOGGER.exception(
+                    "Prompt section provider %s failed; its section was dropped",
+                    getattr(provider, "_plugin_key", provider),
+                )
+        if self._presentation_mode() in {"ptc", "both"}:
+            sections.append(
+                PromptSection(
+                    name="ptc-sdk",
+                    order=5000,
+                    text=render_tool_sdk(self._collect_native_tools()),
+                    source="langharness_core.plugins.presentation.sdk",
+                )
+            )
+        assembled = assemble_sections(sections)
+        if assembled.traces:
+            LOGGER.debug(
+                "prompt sections: %s",
+                ", ".join(
+                    f"{trace.name}[{trace.bytes}B {trace.sha256[7:19]}]"
+                    for trace in assembled.traces
+                ),
+            )
+        return assembled
 
     def _collect_interrupt_before(self) -> list[str]:
         values: list[str] = []
@@ -578,8 +913,13 @@ class PluginAgentLoop:
             self._graph = create_agent(
                 model,
                 tools=self._collect_tools(),
-                middleware=self._collect_middlewares(),
-                system_prompt=self._collect_system_prompt(),
+                middleware=[
+                    *self._collect_middlewares(),
+                    # Innermost: the assembled prompt is the last word on the
+                    # request's system message.
+                    PromptMiddleware(self._prompt_for_request),
+                ],
+                system_prompt=None,
                 response_format=(
                     self._response_format_provider.get_response_format()
                     if self._response_format_provider
@@ -600,12 +940,18 @@ class PluginAgentLoop:
                     if self._checkpointer_provider
                     else None
                 ),
-                store=self._store_provider.get_store() if self._store_provider else None,
+                store=self._store_provider.get_store()
+                if self._store_provider
+                else None,
                 interrupt_before=self._collect_interrupt_before() or None,
                 interrupt_after=self._collect_interrupt_after() or None,
-                debug=self._debug_provider.get_debug() if self._debug_provider else False,
+                debug=self._debug_provider.get_debug()
+                if self._debug_provider
+                else False,
                 name=self._name_provider.get_name() if self._name_provider else None,
-                cache=self._cache_provider.get_cache() if self._cache_provider else None,
+                cache=self._cache_provider.get_cache()
+                if self._cache_provider
+                else None,
                 transformers=self._collect_transformers() or None,
             )
         except Exception:
@@ -613,33 +959,44 @@ class PluginAgentLoop:
             self._graph = None
 
     def invoke(self, message: str, *, thread_id: str | None = None) -> Any:
+        self._require_available_presentation()
         if self._graph is None:
             self._rebuild()
         if self._graph is None:
             raise RuntimeError("Agent graph is not built; no LLM plugin is available")
         config = {"configurable": {"thread_id": thread_id}} if thread_id else None
-        return self._graph.invoke(
-            {"messages": [{"role": "user", "content": message}]}, config=config
-        )
+        token = PTC_AUDIT_SESSION.set(thread_id)
+        try:
+            return self._graph.invoke(
+                {"messages": [{"role": "user", "content": message}]}, config=config
+            )
+        finally:
+            PTC_AUDIT_SESSION.reset(token)
 
-    async def astream(
-        self, message: str, *, thread_id: str | None = None, resume: Any = None
+    async def _forward_stream(
+        self,
+        stream: AsyncIterator[tuple[str, Any]],
+        previous_content: dict[str, str],
+        usage_totals: dict[str, int],
+        audit_events: list[dict[str, Any]] | None = None,
+        session_id: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
-        if self._graph is None:
-            self._rebuild()
-        if self._graph is None:
-            raise RuntimeError("Agent graph is not built; no LLM plugin is available")
-        config = {"configurable": {"thread_id": thread_id}} if thread_id else None
-        previous_content: dict[str, str] = {}
-        usage_totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-        input_value: Any = Command(resume=resume) if resume is not None else {
-            "messages": [{"role": "user", "content": message}]
-        }
-        async for stream_type, chunk in self._graph.astream(
-            input_value,
-            config=config,
-            stream_mode=["messages", "updates"],
-        ):
+        """Translate one graph run's chunks into stream events.
+
+        Pulled out of ``astream`` so the continuation loop and the wrapup round
+        share exactly one translator instead of two copies that can drift.
+        """
+        async for stream_type, chunk in stream:
+            if audit_events:
+                while audit_events:
+                    audit = audit_events.pop(0)
+                    audit = self._scope_audit(audit, session_id)
+                    if self._audit_provider is not None:
+                        await self._audit_provider.append_events([audit])
+                    yield audit
+            for job_event in self._drain_job_events():
+                await self._persist_job_audit(job_event, session_id)
+                yield job_event
             if stream_type == "messages":
                 streamed_message = chunk[0]
                 usage = _extract_usage(streamed_message)
@@ -672,15 +1029,23 @@ class PluginAgentLoop:
             # node name ({"tools": {"__interrupt__": (...), "messages": [...]}}).
             # The interrupt container is a tuple, never a node-update dict.
             for interrupt in _iter_interrupts(chunk):
+                await self._persist_approval_audit(session_id)
                 yield {"type": "approval_required", "request": interrupt}
             for update in chunk.values():
                 if not isinstance(update, dict):
                     continue
                 for interrupt in _iter_interrupts(update):
+                    await self._persist_approval_audit(session_id)
                     yield {"type": "approval_required", "request": interrupt}
                 for updated_message in update.get("messages", []):
                     _strip_orphan_tool_use(updated_message)
                     if isinstance(updated_message, ToolMessage):
+                        await self._persist_tool_audit(
+                            name=updated_message.name or "",
+                            call_id=updated_message.tool_call_id,
+                            status="completed",
+                            session_id=session_id,
+                        )
                         yield {
                             "type": "tool_output",
                             "name": updated_message.name or "tool",
@@ -688,22 +1053,226 @@ class PluginAgentLoop:
                             "output": str(updated_message.content),
                         }
                     for tool_call in getattr(updated_message, "tool_calls", []):
+                        await self._persist_tool_audit(
+                            name=tool_call["name"],
+                            call_id=tool_call["id"],
+                            status="started",
+                            session_id=session_id,
+                        )
                         yield {
                             "type": "tool_call",
                             "name": tool_call["name"],
                             "tool_call_id": tool_call["id"],
                             "args": tool_call["args"],
                         }
+        if audit_events:
+            while audit_events:
+                audit = audit_events.pop(0)
+                audit = self._scope_audit(audit, session_id)
+                if self._audit_provider is not None:
+                    await self._audit_provider.append_events([audit])
+                yield audit
+
+    def _scope_audit(
+        self, audit: dict[str, Any], session_id: str | None
+    ) -> dict[str, Any]:
+        return {**audit, "agent_id": self._agent_id, "session_id": session_id or ""}
+
+    async def _persist_tool_audit(
+        self, *, name: str, call_id: str, status: str, session_id: str | None
+    ) -> None:
+        if self._audit_provider is None or name not in {
+            "exec_command", "wait_job", "write_stdin", "stop_job"
+        } or not call_id:
+            return
+        await self._audit_provider.append_events(
+            [
+                self._scope_audit(
+                    {
+                        "type": "tool_audit",
+                        "root_call_id": call_id,
+                        "sequence": 1 if status == "started" else 2,
+                        "tool": name,
+                        "status": status,
+                    },
+                    session_id,
+                )
+            ]
+        )
+
+    async def _persist_job_audit(
+        self, event: dict[str, Any], session_id: str | None
+    ) -> None:
+        kind = event.get("type")
+        job_id = event.get("job_id")
+        if self._audit_provider is None or kind not in {
+            "job_started", "job_finished"
+        } or not job_id:
+            return
+        status = "started" if kind == "job_started" else str(event.get("state", "finished"))
+        await self._audit_provider.append_events(
+            [
+                self._scope_audit(
+                    {
+                        "type": "job_audit",
+                        "root_call_id": str(job_id),
+                        "sequence": 1 if kind == "job_started" else 2,
+                        "status": status,
+                    },
+                    session_id,
+                )
+            ]
+        )
+
+    async def _persist_approval_audit(self, session_id: str | None) -> None:
+        if self._audit_provider is None:
+            return
+        await self._audit_provider.append_events(
+            [
+                self._scope_audit(
+                    {
+                        "type": "approval_audit",
+                        "root_call_id": f"approval-{uuid.uuid4().hex}",
+                        "sequence": 1,
+                        "status": "required",
+                    },
+                    session_id,
+                )
+            ]
+        )
+
+    async def astream(
+        self, message: str, *, thread_id: str | None = None, resume: Any = None
+    ) -> AsyncIterator[dict[str, Any]]:
+        self._require_available_presentation()
+        if self._graph is None:
+            self._rebuild()
+        if self._graph is None:
+            raise RuntimeError("Agent graph is not built; no LLM plugin is available")
+        config = {"configurable": {"thread_id": thread_id}} if thread_id else None
+        previous_content: dict[str, str] = {}
+        usage_totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        audit_events: list[dict[str, Any]] = []
+        approval_root: str | None = None
+        approval_decisions: list[str] = []
+        if (
+            isinstance(resume, dict)
+            and "decisions" in resume
+            and self._audit_provider is not None
+        ):
+            if not thread_id:
+                raise ValueError("approval resume requires a thread_id")
+            raw_decisions = resume["decisions"]
+            if not isinstance(raw_decisions, list) or not raw_decisions:
+                raise ValueError("approval resume requires decisions")
+            approval_decisions = [
+                str(item.get("type"))
+                if isinstance(item, dict) and item.get("type") in {"approve", "reject", "edit"}
+                else "unknown"
+                for item in raw_decisions
+            ]
+            approval_root = await self._audit_provider.claim_pending_approval(
+                self._agent_id, thread_id, approval_decisions
+            )
+            if approval_root is None:
+                raise RuntimeError("No pending approval for this agent and session")
+        input_value: Any = (
+            Command(resume=resume)
+            if resume is not None
+            else {"messages": [{"role": "user", "content": message}]}
+        )
+
+        async def run_graph(payload: Any) -> AsyncIterator[tuple[str, Any]]:
+            token = PTC_AUDIT_EVENTS.set(audit_events)
+            try:
+                async for chunk in self._graph.astream(
+                    payload, config=config, stream_mode=["messages", "updates"]
+                ):
+                    yield chunk
+            finally:
+                PTC_AUDIT_EVENTS.reset(token)
+
+        rounds_run = 0
+        while True:
+            async for event in self._forward_stream(
+                run_graph(input_value), previous_content, usage_totals, audit_events,
+                session_id=thread_id,
+            ):
+                yield event
+            if approval_root is not None and self._audit_provider is not None:
+                await self._audit_provider.append_events(
+                    [self._scope_audit({
+                        "type": "approval_audit",
+                        "root_call_id": approval_root,
+                        "sequence": 3,
+                        "status": "decision_applied",
+                        "decisions": approval_decisions,
+                    }, thread_id)]
+                )
+                approval_root = None
+            decision = self._decide(rounds_run)
+            if decision is None:
+                break
+            if isinstance(decision, Continue):
+                if self._checkpointer_provider is None:
+                    # Enforced here rather than trusted to the controller: a
+                    # second astream without a checkpointer starts from an
+                    # empty conversation, so "continuing" would silently throw
+                    # away everything the run had established.
+                    yield {"type": "goal_status", "status": "active"}
+                    yield {
+                        "type": "goal_wrapup",
+                        "text": (
+                            "This run cannot continue automatically: no "
+                            "checkpointer is configured, so the conversation "
+                            "would restart and lose its context."
+                        ),
+                    }
+                    break
+                rounds_run += 1
+                yield {
+                    "type": "goal_round_started",
+                    "round": decision.round,
+                    "message": decision.message,
+                }
+                # Same thread_id, so the checkpointer carries the conversation
+                # forward instead of starting over.
+                input_value = {
+                    "messages": [{"role": "user", "content": decision.message}]
+                }
+                continue
+            if isinstance(decision, AwaitUser):
+                yield {"type": "goal_status", "status": "awaiting_user"}
+                break
+            yield {"type": "goal_status", "status": decision.status}
+            yield {"type": "goal_wrapup", "text": decision.wrapup}
+            # One final model step, so the user gets prose rather than a stop.
+            async for event in self._forward_stream(
+                run_graph({"messages": [{"role": "user", "content": decision.wrapup}]}),
+                previous_content,
+                usage_totals,
+                audit_events,
+                session_id=thread_id,
+            ):
+                yield event
+            break
         if usage_totals["total_tokens"]:
             yield {"type": "usage", **usage_totals}
 
     def describe(self) -> dict[str, Any]:
         llm_info = self._llm_provider.get_plugin_info() if self._llm_provider else None
+        available = self._presentation_mode() == "native"
         return {
             "llm": llm_info,
-            "tools": [getattr(tool, "name", str(tool)) for tool in self._collect_tools()],
-            "tool_headlines": self._collect_tool_headlines(),
-            "middleware": [middleware.name for middleware in self._collect_middlewares()],
+            "tools": (
+                [getattr(tool, "name", str(tool)) for tool in self._collect_tools()]
+                if available
+                else []
+            ),
+            "tool_headlines": self._collect_tool_headlines() if available else {},
+            "middleware": [
+                middleware.name for middleware in self._collect_middlewares()
+            ],
         }
 
     def _collect_tool_headlines(self) -> dict[str, str]:

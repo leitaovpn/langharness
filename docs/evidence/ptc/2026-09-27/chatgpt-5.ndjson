@@ -1,0 +1,6 @@
+{"type": "tool_call", "name": "run_code", "tool_call_id": "call_a17fbd00923942dc80fd0990", "args": {"code": "return await tools.add({a: 2, b: 3});"}}
+{"type": "ptc_audit", "sequence": 1, "root_call_id": "ptc-a15e0eae546740c5bd372b15199a8eec", "parent_call_id": "ptc-a15e0eae546740c5bd372b15199a8eec", "call_id": "ptc-a15e0eae546740c5bd372b15199a8eec/1", "name": "add", "args": {"a": 2, "b": 3}, "status": "started", "agent_id": "", "session_id": "ptc-real-60ec911d82ed42bbbb535816b70586c3"}
+{"type": "ptc_audit", "sequence": 2, "root_call_id": "ptc-a15e0eae546740c5bd372b15199a8eec", "parent_call_id": "ptc-a15e0eae546740c5bd372b15199a8eec", "call_id": "ptc-a15e0eae546740c5bd372b15199a8eec/1", "name": "add", "args": {"a": 2, "b": 3}, "status": "completed", "result": 5, "duration_ms": 0, "agent_id": "", "session_id": "ptc-real-60ec911d82ed42bbbb535816b70586c3"}
+{"type": "tool_output", "name": "run_code", "tool_call_id": "call_a17fbd00923942dc80fd0990", "output": "{\"logs\": [], \"result\": 5, \"isolation\": \"process-only\", \"duration_ms\": 64}"}
+{"type": "assistant", "content": "5"}
+{"type": "usage", "input_tokens": 1167, "output_tokens": 65, "total_tokens": 1232}

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from io import StringIO
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,7 @@ DESCRIPTION = (
 )
 
 CAPTURED_MESSAGES: list[list] = []
+CAPTURED_PTC_SCHEMAS: list[list[str]] = []
 
 
 class ScriptedToolCallModel(BaseChatModel):
@@ -68,6 +70,14 @@ class ScriptedToolCallModel(BaseChatModel):
         return "scripted-tool-call-model"
 
     def bind_tools(self, tools, **kwargs):
+        return self
+
+
+class ScriptedPTCModel(ScriptedToolCallModel):
+    def bind_tools(self, tools, **kwargs):
+        CAPTURED_PTC_SCHEMAS.append(
+            [str(getattr(tool, "name", tool.get("name") if isinstance(tool, dict) else tool)) for tool in tools]
+        )
         return self
 
 
@@ -615,6 +625,133 @@ def test_real_plugin_agent_stream_renders_response_once(tmp_path: Path) -> None:
         renderer.finish_response()
 
         assert output.getvalue().count("The answer is 5.") == 1
+    finally:
+        manager.stop()
+
+
+@pytest.mark.parametrize("protocol", ["chat", "anthropic", "responses"])
+def test_real_pelix_ptc_stream_exposes_only_run_code_and_audit(
+    protocol: str, tmp_path: Path
+) -> None:
+    CAPTURED_MESSAGES.clear()
+    CAPTURED_PTC_SCHEMAS.clear()
+    model = ScriptedPTCModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[{
+                    "name": "run_code",
+                    "args": {
+                        "code": "return await tools.add({a: 2, b: 3});",
+                        "description": "sum",
+                    },
+                    "id": "ptc-outer",
+                }],
+            ),
+            AIMessage(content="The answer is 5."),
+        ]
+    )
+    manager = PluginManager(PluginRegistry())
+    manager.start()
+    try:
+        descriptors = [
+            plugin("llm", "langharness_core.plugins.llm.llm", "llm-plugin-factory", "agent.plugin.llm"),
+            plugin("tools", "langharness_core.plugins.tools.tools", "tools-plugin-factory", "agent.plugin.tools"),
+            plugin("tool-presentation", "langharness_core.plugins.presentation.mode", "tool-presentation-plugin-factory", "agent.plugin.tool_presentation"),
+            plugin("ptc-prompt", "langharness_core.plugins.prompts.ptc", "ptc-prompt-plugin-factory", "agent.plugin.prompt_section"),
+            plugin("ptc-runtime", "langharness_core.plugins.presentation.runtime", "ptc-runtime-plugin-factory", "agent.plugin.ptc_runtime"),
+            plugin("agent-loop", "langharness_core.plugins.loop.agent_loop", "agent-loop-factory", SPEC_AGENT_LOOP),
+        ]
+        for descriptor in descriptors:
+            manager.install_descriptor(descriptor)
+        properties = {
+            "llm": {
+                "plugin.model.instance": model,
+                "plugin.model.protocol": protocol,
+            },
+            "tool-presentation": {"plugin.tools.presentation": "ptc"},
+        }
+        for descriptor in descriptors:
+            manager.create_instance(
+                descriptor.factory, descriptor.module, ROOT_SCOPE_ID,
+                properties=properties.get(descriptor.name, {}),
+            )
+        loop = manager.get_service(SPEC_AGENT_LOOP)
+
+        async def collect() -> list[dict[str, Any]]:
+            return [event async for event in loop.astream("sum")]
+
+        events = asyncio.run(collect())
+        first_system = next(
+            message for message in CAPTURED_MESSAGES[-2] if isinstance(message, SystemMessage)
+        )
+        assert "run_code is the only tool" in str(first_system.content)
+        assert "type ToolArgsMap" in str(first_system.content)
+        assert '"add"' in str(first_system.content)
+        assert '"run_code"' not in str(first_system.content)
+        ndjson = tmp_path / f"ptc-{protocol}.ndjson"
+        ndjson.write_text(
+            "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events),
+            encoding="utf-8",
+        )
+        assert [json.loads(line) for line in ndjson.read_text().splitlines()] == events
+        assert manager.get_service("agent.plugin.llm").get_protocol() == protocol
+        assert CAPTURED_PTC_SCHEMAS == [["run_code"], ["run_code"]]
+        assert any(event.get("type") == "assistant" and "5" in event.get("content", "") for event in events)
+        assert [event["status"] for event in events if event.get("type") == "ptc_audit"] == ["started", "completed"]
+        outputs = [event for event in events if event.get("type") == "tool_output"]
+        assert len(outputs) == 1 and json.loads(outputs[0]["output"])["result"] == 5
+        assert "audit" not in outputs[0]["output"]
+    finally:
+        manager.stop()
+
+
+def test_real_pelix_both_mode_exposes_native_and_run_code() -> None:
+    CAPTURED_PTC_SCHEMAS.clear()
+    model = ScriptedPTCModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "add",
+                        "args": {"a": 2, "b": 3},
+                        "id": "native-call",
+                    }
+                ],
+            ),
+            AIMessage(content="native result received"),
+        ]
+    )
+    manager = PluginManager(PluginRegistry())
+    manager.start()
+    try:
+        descriptors = [
+            plugin("llm", "langharness_core.plugins.llm.llm", "llm-plugin-factory", "agent.plugin.llm"),
+            plugin("tools", "langharness_core.plugins.tools.tools", "tools-plugin-factory", "agent.plugin.tools"),
+            plugin("tool-presentation", "langharness_core.plugins.presentation.mode", "tool-presentation-plugin-factory", "agent.plugin.tool_presentation"),
+            plugin("ptc-runtime", "langharness_core.plugins.presentation.runtime", "ptc-runtime-plugin-factory", "agent.plugin.ptc_runtime"),
+            plugin("agent-loop", "langharness_core.plugins.loop.agent_loop", "agent-loop-factory", SPEC_AGENT_LOOP),
+        ]
+        for descriptor in descriptors:
+            manager.install_descriptor(descriptor)
+        properties = {
+            "llm": {"plugin.model.instance": model},
+            "tool-presentation": {"plugin.tools.presentation": "both"},
+        }
+        for descriptor in descriptors:
+            manager.create_instance(
+                descriptor.factory,
+                descriptor.module,
+                ROOT_SCOPE_ID,
+                properties=properties.get(descriptor.name, {}),
+            )
+        loop = manager.get_service(SPEC_AGENT_LOOP)
+
+        result = loop.invoke("call native tool")
+
+        assert CAPTURED_PTC_SCHEMAS == [["add", "run_code"], ["add", "run_code"]]
+        assert result["messages"][-1].content == "native result received"
     finally:
         manager.stop()
 

@@ -1,0 +1,1 @@
+{"protocol": "chat", "error_type": "OpenAIPermissionDeniedError", "error_category": "quota_exhausted", "status": 403}

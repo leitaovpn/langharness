@@ -1,5 +1,47 @@
-"""Concrete plugin implementations."""
+# pyright: reportUnsupportedDunderAll=false
+"""Concrete plugin implementations, resolved lazily."""
 
+from importlib import import_module
+from typing import Any
+
+_EXPORTS = {
+    "AgentRegistryPlugin": ("agents.registry", "AgentRegistryPlugin"),
+    "LLMPlugin": ("llm.llm", "LLMPlugin"),
+    "PluginAgentLoop": ("loop.agent_loop", "PluginAgentLoop"),
+    "SQLiteCheckpointerPlugin": ("checkpointer.sqlite", "SQLiteCheckpointerPlugin"),
+    "SQLiteSessionIndexPlugin": ("sessions.sqlite", "SQLiteSessionIndexPlugin"),
+    "TemplateAgentNamePlugin": ("name.template_name", "TemplateAgentNamePlugin"),
+    "TemplateCachePlugin": ("cache.template_cache", "TemplateCachePlugin"),
+    "TemplateCheckpointerPlugin": ("checkpointer.template_checkpointer", "TemplateCheckpointerPlugin"),
+    "TemplateContextSchemaPlugin": ("context_schema.template_context_schema", "TemplateContextSchemaPlugin"),
+    "TemplateDebugPlugin": ("debug.template_debug", "TemplateDebugPlugin"),
+    "TemplateInterruptAfterPlugin": ("interrupt_after.template_interrupt_after", "TemplateInterruptAfterPlugin"),
+    "TemplateInterruptBeforePlugin": ("interrupt_before.template_interrupt_before", "TemplateInterruptBeforePlugin"),
+    "TemplateMiddlewarePlugin": ("middleware.template_middleware", "TemplateMiddlewarePlugin"),
+    "TemplateResponseFormatPlugin": ("response_format.template_response_format", "TemplateResponseFormatPlugin"),
+    "TemplateStateSchemaPlugin": ("state_schema.template_state_schema", "TemplateStateSchemaPlugin"),
+    "TemplateStorePlugin": ("store.template_store", "TemplateStorePlugin"),
+    "TemplateSystemPromptPlugin": ("system_prompt.template_system_prompt", "TemplateSystemPromptPlugin"),
+    "ToolPlugin": ("tools.tools", "ToolPlugin"),
+    "WorkspaceToolsPlugin": ("tools.workspace", "WorkspaceToolsPlugin"),
+    "TemplateTransformersPlugin": ("transformers.template_transformers", "TemplateTransformersPlugin"),
+}
+
+__all__ = list(_EXPORTS)
+
+
+def __getattr__(name: str) -> Any:
+    try:
+        module_name, attribute = _EXPORTS[name]
+    except KeyError as exc:
+        raise AttributeError(name) from exc
+    value = getattr(import_module(f"{__name__}.{module_name}"), attribute)
+    globals()[name] = value
+    return value
+
+
+"""Legacy eager imports removed; names above preserve the public API."""
+'''DISABLED
 from langharness_core.plugins.agents.registry import AgentRegistryPlugin
 from langharness_core.plugins.cache.template_cache import TemplateCachePlugin
 from langharness_core.plugins.checkpointer.sqlite import SQLiteCheckpointerPlugin
@@ -38,6 +80,7 @@ from langharness_core.plugins.tools.workspace import WorkspaceToolsPlugin
 from langharness_core.plugins.transformers.template_transformers import (
     TemplateTransformersPlugin,
 )
+DISABLED'''
 
 __all__ = [
     "AgentRegistryPlugin",

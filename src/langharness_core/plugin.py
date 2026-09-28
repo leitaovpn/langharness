@@ -11,24 +11,35 @@ from langharness_core.contracts import (
     SPEC_AGENT_LOOP,
     SPEC_AGENT_REGISTRY,
     SPEC_AGENT_SERVER,
+    SPEC_AUDIT,
     SPEC_CACHE,
     SPEC_CHECKPOINTER,
     SPEC_CONTEXT_SCHEMA,
     SPEC_DEBUG,
+    SPEC_GOAL,
     SPEC_INTERRUPT_AFTER,
     SPEC_INTERRUPT_BEFORE,
+    SPEC_JOB_MANAGER,
     SPEC_LLM,
     SPEC_MIDDLEWARE,
     SPEC_NAME,
+    SPEC_PROMPT_SECTION,
+    SPEC_PTC_RUNTIME,
     SPEC_RESPONSE_FORMAT,
+    SPEC_REVIEWER,
+    SPEC_RUN_CONTROLLER,
+    SPEC_SANDBOX,
     SPEC_SESSION_INDEX,
     SPEC_STATE_SCHEMA,
     SPEC_STORE,
     SPEC_SYSTEM_PROMPT,
     SPEC_TOOL,
+    SPEC_TOOL_PRESENTATION,
     SPEC_TRANSFORMERS,
+    SPEC_VERIFIER,
+    SPEC_WORKSPACE,
+    SPEC_WORKSPACE_STATE,
 )
-from langharness_core.plugins.agents.export import AGENT_TOOL_EXPORTS
 from langharness_plugin.contracts import SPEC_TOOL_EXPORT_TARGET
 from langharness_plugin.package import PluginContribution, PluginPackage
 from langharness_plugin.registry import PluginDescriptor
@@ -49,9 +60,154 @@ AGENT_PLUGIN_CATALOG: dict[str, tuple[str, str, str]] = {
         "agent-name-plugin-factory",
         SPEC_NAME,
     ),
+    "system-prompt-plugin": (
+        "langharness_core.plugins.system_prompt.template_system_prompt",
+        "system-prompt-plugin-factory",
+        SPEC_SYSTEM_PROMPT,
+    ),
+    "workspace": (
+        "langharness_core.plugins.workspace.root",
+        "workspace-root-plugin-factory",
+        SPEC_WORKSPACE,
+    ),
+    "repository-instructions": (
+        "langharness_core.plugins.instructions.repository",
+        "repository-instructions-plugin-factory",
+        SPEC_PROMPT_SECTION,
+    ),
+    "prompt": (
+        "langharness_core.plugins.prompts.code_agent",
+        "code-agent-prompt-plugin-factory",
+        SPEC_PROMPT_SECTION,
+    ),
+    "ptc-prompt": (
+        "langharness_core.plugins.prompts.ptc",
+        "ptc-prompt-plugin-factory",
+        SPEC_PROMPT_SECTION,
+    ),
+    "workspace-state": (
+        "langharness_core.plugins.workspace.state",
+        "workspace-state-plugin-factory",
+        SPEC_WORKSPACE_STATE,
+    ),
+    "code-tools": (
+        "langharness_core.plugins.tools.code_workspace",
+        "code-workspace-tools-plugin-factory",
+        SPEC_TOOL,
+    ),
+    "goal": (
+        "langharness_core.plugins.goals.sqlite",
+        "sqlite-goal-plugin-factory",
+        SPEC_GOAL,
+    ),
+    "verifier": (
+        "langharness_core.plugins.verifier.project",
+        "project-verifier-plugin-factory",
+        SPEC_VERIFIER,
+    ),
+    "reviewer": (
+        "langharness_core.plugins.reviewer.provider",
+        "reviewer-plugin-factory",
+        SPEC_REVIEWER,
+    ),
+    "goal-tools": (
+        "langharness_core.plugins.goals.tools",
+        "goal-tools-plugin-factory",
+        SPEC_TOOL,
+    ),
+    "exec": (
+        "langharness_core.plugins.exec.jobs",
+        "job-manager-plugin-factory",
+        SPEC_JOB_MANAGER,
+    ),
+    "exec-tools": (
+        "langharness_core.plugins.exec.tools",
+        "exec-tools-plugin-factory",
+        SPEC_TOOL,
+    ),
+    "run-controller": (
+        "langharness_core.plugins.controller.goal_round",
+        "goal-round-controller-plugin-factory",
+        SPEC_RUN_CONTROLLER,
+    ),
+    "verify-tool": (
+        "langharness_core.plugins.goals.verify_tool",
+        "verify-tool-plugin-factory",
+        SPEC_TOOL,
+    ),
+    "ask-user": (
+        "langharness_core.plugins.goals.ask_user",
+        "ask-user-plugin-factory",
+        SPEC_TOOL,
+    ),
+    "tool-presentation": (
+        "langharness_core.plugins.presentation.mode",
+        "tool-presentation-plugin-factory",
+        SPEC_TOOL_PRESENTATION,
+    ),
+    "sandbox": (
+        "langharness_core.plugins.exec.sandbox",
+        "sandbox-plugin-factory",
+        SPEC_SANDBOX,
+    ),
+    "audit": (
+        "langharness_core.plugins.sessions.audit",
+        "audit-plugin-factory",
+        SPEC_AUDIT,
+    ),
+    "delivery": (
+        "langharness_core.plugins.delivery.manifest",
+        "delivery-tools-plugin-factory",
+        SPEC_TOOL,
+    ),
+    "skills": (
+        "langharness_core.plugins.delivery.skills",
+        "skills-tools-plugin-factory",
+        SPEC_TOOL,
+    ),
 }
 
 DEFAULT_AGENT_PLUGINS: tuple[str, ...] = ("tools", "name")
+
+AGENT_PRESETS: dict[str, tuple[str, ...]] = {
+    "simple": DEFAULT_AGENT_PLUGINS,
+    "code": (
+        "name",
+        "workspace",
+        "workspace-state",
+        "code-tools",
+        "exec",
+        "exec-tools",
+        "repository-instructions",
+        "prompt",
+        "goal",
+        "goal-tools",
+        "verify-tool",
+        "ask-user",
+        "verifier",
+        "run-controller",
+    ),
+    "ptc": (
+        "name",
+        "workspace",
+        "workspace-state",
+        "code-tools",
+        "exec",
+        "exec-tools",
+        "repository-instructions",
+        "prompt",
+        "ptc-prompt",
+        "tool-presentation",
+        "goal",
+        "goal-tools",
+        "verify-tool",
+        "ask-user",
+        "verifier",
+        "run-controller",
+    ),
+}
+PRESET_PLUGIN_KEY = "preset"
+PRESET_NAME_PROPERTY = "preset.name"
 
 DYNAMIC_PLUGIN_CATALOG: dict[str, tuple[str, str, str]] = {
     "cache-plugin": (
@@ -142,6 +298,8 @@ AGENT_LOOP_FIELDS: dict[str, str] = {
     SPEC_LLM: "_llm_provider",
     SPEC_TOOL: "_tool_providers",
     SPEC_SYSTEM_PROMPT: "_system_prompt_providers",
+    SPEC_PROMPT_SECTION: "_prompt_section_providers",
+    SPEC_WORKSPACE: "_workspace_provider",
     SPEC_MIDDLEWARE: "_middleware_providers",
     SPEC_NAME: "_name_provider",
     SPEC_RESPONSE_FORMAT: "_response_format_provider",
@@ -149,9 +307,15 @@ AGENT_LOOP_FIELDS: dict[str, str] = {
     SPEC_TRANSFORMERS: "_transformers_providers",
     SPEC_INTERRUPT_BEFORE: "_interrupt_before_providers",
     SPEC_INTERRUPT_AFTER: "_interrupt_after_providers",
+    SPEC_RUN_CONTROLLER: "_run_controller",
+    SPEC_TOOL_PRESENTATION: "_presentation_provider",
 }
 
 AGENT_PLUGIN_DESCRIPTIONS: dict[str, str] = {
+    "system-prompt-plugin": (
+        "Provides an agent-scoped system prompt. Properties: "
+        "plugin.system_prompt, plugin.agent_id."
+    ),
     "llm": (
         "Provides the LLM service consumed by an agent loop. Implements "
         "agent.plugin.llm. Use it whenever an agent must call a model; skip it "
@@ -170,6 +334,118 @@ AGENT_PLUGIN_DESCRIPTIONS: dict[str, str] = {
         "Names the agent in UI and prompts. Implements agent.plugin.name. "
         "Properties: plugin.agent_name, plugin.agent_id. Requires a restart "
         "for property changes. Uninstall when the agent is removed."
+    ),
+    "workspace": (
+        "Pins the workspace realpath shared by prompt sections, file tools and "
+        "command execution for one agent scope. Implements "
+        "agent.plugin.workspace. Properties: plugin.workspace.root_dir, "
+        "plugin.agent_id. Requires a restart for property changes. Uninstall "
+        "when the agent is removed."
+    ),
+    "reviewer": (
+        "Optional model-backed review evidence provider. It is disabled by default "
+        "and cannot complete a goal or bypass the project verifier. Properties: "
+        "plugin.reviewer.enabled, plugin.reviewer.path, plugin.agent_id."
+    ),
+    "delivery": (
+        "Optional read-only delivery manifest for explicit workspace files. "
+        "Declares workspace-read permission and SHA-256 artifact metadata; "
+        "not included in default presets."
+    ),
+    "skills": (
+        "Optional read-only inventory of workspace SKILL.md files. It never executes or fetches skill content."
+    ),
+    "context-compression": (
+        "Optional bounded context middleware. Disabled unless "
+        "plugin.context.budget_bytes is positive; preserves control evidence "
+        "while reducing message history."
+    ),
+    "repository-instructions": (
+        "Contributes AGENTS.md and compatible instruction files from the "
+        "workspace root down to the directory being edited. Implements "
+        "agent.plugin.prompt_section. Properties: plugin.instructions.include, "
+        "plugin.instructions.budget_bytes, plugin.agent_id. Requires a restart "
+        "for property changes. Uninstall when the agent is removed."
+    ),
+    "prompt": (
+        "Contributes the shipped code-agent persona, safety, workflow and "
+        "completion prompt sections. Implements agent.plugin.prompt_section. "
+        "Properties: plugin.agent_id. Requires a restart for property changes. "
+        "Uninstall when the agent is removed."
+    ),
+    "workspace-state": (
+        "Counts workspace writes so verification reports can be tied to the "
+        "generation they describe. Implements agent.plugin.workspace_state. "
+        "Properties: plugin.workspace.root_dir, plugin.agent_id. Requires a "
+        "restart for property changes. Uninstall when the agent is removed."
+    ),
+    "code-tools": (
+        "Provides the code agent's bounded read, search, patch-editing and "
+        "git-status tools. Implements agent.plugin.tools. Properties: "
+        "plugin.tools.max_read_bytes, plugin.tools.max_entries, "
+        "plugin.agent_id. Requires a restart for property changes. Uninstall "
+        "when the agent is removed."
+    ),
+    "goal": (
+        "Persists the agent's objective, acceptance criteria and revision, and "
+        "refuses updates that lose the revision race. Implements "
+        "agent.plugin.goal. Properties: plugin.goal.path, "
+        "plugin.goal.max_rounds, plugin.agent_id. Requires a restart for "
+        "property changes. Uninstall when the agent is removed."
+    ),
+    "verifier": (
+        "Runs the project's configured gate commands and signs a verification "
+        "report tying the result to a workspace generation. Implements "
+        "agent.plugin.verifier. Properties: plugin.verify.commands (a list of "
+        "argv arrays), plugin.verify.timeout_seconds, plugin.agent_id. "
+        "Requires a restart for property changes. Uninstall when the agent is "
+        "removed."
+    ),
+    "goal-tools": (
+        "Exposes get_goal and finish_goal, and enforces the completion gate "
+        "before a goal may reach 'complete'. Implements agent.plugin.tools. "
+        "Properties: plugin.agent_id. Requires a restart for property changes. "
+        "Uninstall when the agent is removed."
+    ),
+    "exec": (
+        "Starts and tracks background commands, owning each one's process "
+        "group so a cancelled job leaves nothing behind. Implements "
+        "agent.plugin.job_manager. Properties: plugin.exec.max_output_bytes, "
+        "plugin.exec.max_jobs, plugin.agent_id. Requires a restart for "
+        "property changes. Uninstall when the agent is removed."
+    ),
+    "exec-tools": (
+        "Provides exec_command and the job control tools (wait_job, "
+        "write_stdin, stop_job), bounded by the workspace cwd, a deadline, an "
+        "output cap and an environment allowlist. Implements "
+        "agent.plugin.tools. Properties: plugin.exec.default_timeout_seconds, "
+        "plugin.exec.max_timeout_seconds, plugin.agent_id. Requires a restart "
+        "for property changes. Uninstall when the agent is removed."
+    ),
+    "run-controller": (
+        "Decides whether an active goal should continue for another model "
+        "round, await user input, or stop. Implements "
+        "agent.plugin.run_controller. Properties: plugin.agent_id. Requires "
+        "a restart for property changes. Uninstall when the agent is removed."
+    ),
+    "verify-tool": (
+        "Exposes the verify tool so an agent can run project gates before it "
+        "submits goal completion. Implements agent.plugin.tools. Properties: "
+        "plugin.agent_id. Requires a restart for property changes. Uninstall "
+        "when the agent is removed."
+    ),
+    "ask-user": (
+        "Exposes ask_user, which records that an active goal is awaiting real "
+        "user input. Implements agent.plugin.tools. Properties: "
+        "plugin.agent_id. Requires a restart for property changes. Uninstall "
+        "when the agent is removed."
+    ),
+    "tool-presentation": (
+        "Selects the agent-scoped tool presentation mode. Implements "
+        "agent.plugin.tool_presentation. Properties: "
+        "plugin.tools.presentation (native, ptc, or both), plugin.agent_id. "
+        "Requires a restart for property changes. Uninstall when the agent "
+        "is removed."
     ),
     "agent-loop": (
         "Runs the agent loop for one agent scope. Implements "
@@ -235,6 +511,34 @@ def agent_required_modules() -> list[str]:
     modules = [AGENT_PLUGIN_CATALOG[plugin][0] for plugin in DEFAULT_AGENT_PLUGINS]
     modules.append(AGENT_LOOP_MODULE)
     return list(dict.fromkeys(modules))
+
+
+def agent_preset_bindings(preset: str) -> tuple[str, ...]:
+    """The plugin names a preset turns on; unknown names fall back to simple."""
+    return AGENT_PRESETS.get(preset, AGENT_PRESETS["simple"])
+
+
+def agent_preset_modules(preset: str) -> list[str]:
+    """The bundle modules a preset needs installed before it can materialize."""
+    return list(
+        dict.fromkeys(
+            AGENT_PLUGIN_CATALOG[name][0]
+            for name in agent_preset_bindings(preset)
+            if name in AGENT_PLUGIN_CATALOG
+        )
+    )
+
+
+def preset_name_of(plugins: dict[str, Any]) -> str | None:
+    """Read the preset an agent configuration selected, if any."""
+    entry = plugins.get(PRESET_PLUGIN_KEY)
+    if not isinstance(entry, dict):
+        return None
+    properties = entry.get("properties")
+    if not isinstance(properties, dict):
+        return None
+    name = properties.get(PRESET_NAME_PROPERTY)
+    return str(name) if name else None
 
 
 def agent_filter(agent_id: str) -> str:
@@ -415,21 +719,66 @@ def agent_server_descriptor() -> PluginDescriptor:
     )
 
 
+def ptc_runtime_descriptor() -> PluginDescriptor:
+    """Static definition of the shared, stateless Node process runtime."""
+    return PluginDescriptor(
+        name="ptc-runtime",
+        version="1.0.0",
+        module="langharness_core.plugins.presentation.runtime",
+        factory="ptc-runtime-plugin-factory",
+        specification=SPEC_PTC_RUNTIME,
+        description=(
+            "Runs one PTC program in a fresh Node process and dispatches host "
+            "tool calls. Implements agent.plugin.ptc_runtime. Shared stateless "
+            "runtime service; PTC modes fail closed when it is unavailable."
+        ),
+    )
+
+
+def sandbox_descriptor() -> PluginDescriptor:
+    """Static definition of the optional OS sandbox capability."""
+    return PluginDescriptor(
+        name="sandbox",
+        version="1.0.0",
+        module="langharness_core.plugins.exec.sandbox",
+        factory="sandbox-plugin-factory",
+        specification=SPEC_SANDBOX,
+        description=(
+            "Detects and wraps supported OS sandbox backends. Reports "
+            "process-only when no backend is available."
+        ),
+    )
+
+
+def audit_descriptor() -> PluginDescriptor:
+    """Static definition of the shared append-only audit store."""
+    return PluginDescriptor(
+        name="audit",
+        version="1.0.0",
+        module="langharness_core.plugins.sessions.audit",
+        factory="audit-plugin-factory",
+        specification=SPEC_AUDIT,
+        description=(
+            "Persists execution audit events in append-only SQLite storage. "
+            "Implements agent.plugin.audit."
+        ),
+    )
+
+
 def builtin_package() -> PluginPackage:
     """Describe server-scoped core plugins and agent plugin templates."""
     return PluginPackage(
         id="builtin.core",
         version="1.0.0",
         contributions=(
+            PluginContribution("ptc-runtime", "root", ptc_runtime_descriptor()),
+            PluginContribution("sandbox", "root", sandbox_descriptor()),
+            PluginContribution("audit", "root", audit_descriptor()),
             PluginContribution(
                 "sqlite-checkpointer", "server", sqlite_checkpointer_descriptor()
             ),
-            PluginContribution(
-                "session-index", "server", session_index_descriptor()
-            ),
-            PluginContribution(
-                "agent-registry", "server", agent_registry_descriptor()
-            ),
+            PluginContribution("session-index", "server", session_index_descriptor()),
+            PluginContribution("agent-registry", "server", agent_registry_descriptor()),
             PluginContribution(
                 "agent-directory", "server", agent_directory_descriptor()
             ),
@@ -442,6 +791,77 @@ def builtin_package() -> PluginPackage:
             ),
             PluginContribution(
                 "name-template", "agent", agent_plugin_template_descriptor("name")
+            ),
+            PluginContribution(
+                "system-prompt-template",
+                "agent",
+                agent_plugin_template_descriptor("system-prompt-plugin"),
+            ),
+            PluginContribution(
+                "workspace-template",
+                "agent",
+                agent_plugin_template_descriptor("workspace"),
+            ),
+            PluginContribution(
+                "repository-instructions-template",
+                "agent",
+                agent_plugin_template_descriptor("repository-instructions"),
+            ),
+            PluginContribution(
+                "code-agent-prompt-template",
+                "agent",
+                agent_plugin_template_descriptor("prompt"),
+            ),
+            PluginContribution(
+                "workspace-state-template",
+                "agent",
+                agent_plugin_template_descriptor("workspace-state"),
+            ),
+            PluginContribution(
+                "code-tools-template",
+                "agent",
+                agent_plugin_template_descriptor("code-tools"),
+            ),
+            PluginContribution(
+                "goal-template", "agent", agent_plugin_template_descriptor("goal")
+            ),
+            PluginContribution(
+                "verifier-template",
+                "agent",
+                agent_plugin_template_descriptor("verifier"),
+            ),
+            PluginContribution(
+                "goal-tools-template",
+                "agent",
+                agent_plugin_template_descriptor("goal-tools"),
+            ),
+            PluginContribution(
+                "exec-template", "agent", agent_plugin_template_descriptor("exec")
+            ),
+            PluginContribution(
+                "exec-tools-template",
+                "agent",
+                agent_plugin_template_descriptor("exec-tools"),
+            ),
+            PluginContribution(
+                "verify-tool-template",
+                "agent",
+                agent_plugin_template_descriptor("verify-tool"),
+            ),
+            PluginContribution(
+                "ask-user-template",
+                "agent",
+                agent_plugin_template_descriptor("ask-user"),
+            ),
+            PluginContribution(
+                "run-controller-template",
+                "agent",
+                agent_plugin_template_descriptor("run-controller"),
+            ),
+            PluginContribution(
+                "tool-presentation-template",
+                "agent",
+                agent_plugin_template_descriptor("tool-presentation"),
             ),
             PluginContribution(
                 "agent-loop-template", "agent", agent_loop_template_descriptor()
@@ -520,6 +940,8 @@ def dynamic_package() -> PluginPackage:
 
 def agent_tools_package() -> PluginPackage:
     """Describe the agent management tools installed via dynamic discovery."""
+    from langharness_core.plugins.agents.export import AGENT_TOOL_EXPORTS
+
     return PluginPackage(
         id="agent.tools",
         version="1.0.0",
