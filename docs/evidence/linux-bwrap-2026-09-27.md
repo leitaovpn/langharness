@@ -72,3 +72,15 @@ is caused by the address-space limit colliding with Node's TypeScript-strip
 WASM initialization. The limiter must not simply be removed; the remaining
 implementation work is to initialize/transform before applying the limit or
 use a non-WASM TypeScript path.
+
+## Non-WASM runtime transform validation
+
+The bootstrap was then run in Node 22 with a 2 GiB virtual-address limit:
+
+```text
+{"type":"done","result":1,"logs":[]}
+```
+
+The request contained `const value: number = 1` and a declaration-only SDK.
+This succeeds because the new narrow runtime transform does not initialize
+Node's WASM TypeScript compiler.

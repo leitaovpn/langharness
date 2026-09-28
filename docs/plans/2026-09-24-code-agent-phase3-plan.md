@@ -64,6 +64,10 @@
     Linux CPU/内存限制现在接入与 exec 相同的 rlimit hook（内存上限 2 GiB，CPU 按
     deadline）；本机测试验证启动参数，Linux-only 测试读取子进程 `/proc/self/limits`，
     但当前 macOS 环境未实际执行该测试。真实 Linux bwrap 验证仍待完成。
+  - Node 22 的 `stripTypeScriptTypes` 在 RLIMIT_AS 下会因 WASM 初始化失败；PTC
+    bootstrap 已改为忽略 declaration-only SDK，并使用窄范围、无 WASM 的运行时类型
+    转换。主机 PTC 定向测试 `21 passed, 1 skipped`，Linux Node 22 + 2 GiB
+    `ulimit -v` 直接协议验证返回 `result: 1`；完整 Python Linux 集成回归仍待重跑。
 - [ ] P3-C1 reviewer provider：可选 reviewer agent，只产生独立证据，不绕过 verify/finish
   的确定性门禁；缺少 provider 时明确 disabled。
   - 已新增 `ReviewerProvider` 与可选 agent plugin catalog 项；默认 disabled，返回明确
