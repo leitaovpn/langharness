@@ -39,6 +39,7 @@ PUBLIC_MODULES = [
     "langharness_core.plugins",
     "langharness_core.plugins.agents",
     "langharness_core.plugins.agents.directory",
+    "langharness_core.plugins.agents.simple_prompt",
     "langharness_core.plugins.agents.registry",
     "langharness_core.plugins.sessions",
     "langharness_core.plugins.sessions.sqlite",

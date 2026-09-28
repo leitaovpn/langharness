@@ -16,6 +16,7 @@ from langharness_core.contracts import (
     AgentDirectoryProvider,
 )
 from langharness_core.plugins.agents.directory import AgentDirectoryPlugin
+from langharness_core.plugins.agents.simple_prompt import simple_agent_prompt
 from langharness_plugin.contracts import SPEC_PLUGIN_SCOPE, ScopedPluginRegistrar
 from langharness_plugin.registry import PluginInstanceSnapshot
 from langharness_plugin.scope_const import AGENT_SCOPE_ID
@@ -25,6 +26,7 @@ from langharness_scope import ROOT_SCOPE_ID, Scope, ScopeId, ScopeTree
 FACTORIES = {
     "tools": "workspace-tools-plugin-factory",
     "name": "agent-name-plugin-factory",
+    "system-prompt": "system-prompt-plugin-factory",
     "llm": "llm-plugin-factory",
     "agent-loop": "agent-loop-factory",
 }
@@ -41,6 +43,20 @@ def agent_record(
         "created_at": "2026-09-15T00:00:00+00:00",
         "updated_at": "2026-09-15T00:00:00+00:00",
     }
+
+
+def test_builtin_simple_agent_receives_code_agent_creation_instructions() -> None:
+    directory = AgentDirectoryPlugin()
+    bindings = directory._bindings("simple_agent")
+    assert "system-prompt-plugin" in bindings
+    assert "system-prompt-plugin" not in directory._bindings("another_agent")
+    properties = directory._binding_properties(
+        agent_record(), "system-prompt-plugin"
+    )
+    assert properties is not None
+    assert properties["plugin.system_prompt"] == simple_agent_prompt()
+    assert "POST /agents" in simple_agent_prompt()
+    assert '"preset.name": "code"' in simple_agent_prompt()
 
 
 def test_ptc_preset_sets_presentation_mode_and_honours_explicit_override() -> None:
@@ -66,6 +82,7 @@ REQUIRED_MODULES = {
     "langharness_core.plugins.tools.workspace",
     "langharness_core.plugins.name.template_name",
     "langharness_core.plugins.loop.agent_loop",
+    "langharness_core.plugins.system_prompt.template_system_prompt",
 }
 
 LLM_MODULE = "langharness_core.plugins.llm.llm"
@@ -317,6 +334,7 @@ def test_validate_materializes_default_plugins_and_loop() -> None:
     assert {item.factory for item in scope.instances.values()} == {
         FACTORIES["tools"],
         FACTORIES["name"],
+        FACTORIES["system-prompt"],
         FACTORIES["agent-loop"],
     }
     tools = only(scope, FACTORIES["tools"])
@@ -335,6 +353,7 @@ def test_validate_materializes_default_plugins_and_loop() -> None:
         "_scoped_llm_providers": visibility,
         "_tool_providers": visibility,
         "_name_provider": visibility,
+        "_system_prompt_providers": visibility,
         "_prompt_section_providers": visibility,
         "_workspace_provider": visibility,
         "_run_controller": visibility,
@@ -360,7 +379,7 @@ def test_list_agents_reports_materialization() -> None:
     entry = plugin.list_agents()[0]
     assert entry["id"] == "simple_agent"
     assert entry["materialized"] is True
-    assert entry["plugins"] == ["name", "tools"]
+    assert entry["plugins"] == ["name", "system-prompt-plugin", "tools"]
 
 
 def test_get_loop_uses_the_agent_filter() -> None:
@@ -387,7 +406,7 @@ def test_ensure_plugin_instance_creates_agent_scoped_llm() -> None:
     assert snapshot.module == LLM_MODULE
     assert snapshot.properties == {**properties, "plugin.agent_id": "simple_agent"}
     assert snapshot.scope_id == ScopeId("agent:simple_agent")
-    assert plugin.list_agents()[0]["plugins"] == ["llm", "name", "tools"]
+    assert plugin.list_agents()[0]["plugins"] == ["llm", "name", "system-prompt-plugin", "tools"]
 
 
 def test_ensure_plugin_instance_is_idempotent_for_equal_configuration() -> None:
@@ -399,7 +418,7 @@ def test_ensure_plugin_instance_is_idempotent_for_equal_configuration() -> None:
 
     assert plugin._scope.killed == []
     assert len(plugin._scope.by_factory(FACTORIES["llm"])) == 1
-    assert len(plugin._scope.instances) == 4
+    assert len(plugin._scope.instances) == 5
 
 
 def test_ensure_plugin_instance_replaces_changed_configuration() -> None:
@@ -449,13 +468,14 @@ def test_reload_tears_down_and_materializes_again() -> None:
 
     plugin.reload("simple_agent")
 
-    assert len(plugin._scope.killed) == 4  # loop + tools + name + llm
+    assert len(plugin._scope.killed) == 5  # loop + tools + name + prompt + llm
     assert {item.factory for item in plugin._scope.instances.values()} == {
         FACTORIES["tools"],
         FACTORIES["name"],
+        FACTORIES["system-prompt"],
         FACTORIES["agent-loop"],
     }
-    assert plugin.list_agents()[0]["plugins"] == ["name", "tools"]
+    assert plugin.list_agents()[0]["plugins"] == ["name", "system-prompt-plugin", "tools"]
 
 
 def test_reload_without_agent_targets_every_materialized_agent() -> None:
@@ -486,7 +506,7 @@ def test_bind_callbacks_materialize_and_release() -> None:
     plugin._scope = FakeScope()
 
     plugin._on_scope_bind("_scope", plugin._scope, None)
-    assert len(plugin._scope.instances) == 3
+    assert len(plugin._scope.instances) == 4
 
     plugin._on_scope_unbind("_scope", plugin._scope, None)
     assert plugin._instances == {}
@@ -623,7 +643,7 @@ def test_bind_and_unbind_callbacks_guard_services() -> None:
 
     plugin._on_registry_bind("_registry", registry, None)
     plugin._on_scope_bind("_scope", scope, None)
-    assert len(scope.instances) == 3
+    assert len(scope.instances) == 4
 
     plugin._on_registry_unbind("_registry", registry, None)
     plugin._on_scope_unbind("_scope", scope, None)
@@ -643,6 +663,7 @@ def test_reload_of_unknown_agent_is_a_noop() -> None:
     assert {item.factory for item in plugin._scope.instances.values()} == {
         FACTORIES["tools"],
         FACTORIES["name"],
+        FACTORIES["system-prompt"],
         FACTORIES["agent-loop"],
     }
 

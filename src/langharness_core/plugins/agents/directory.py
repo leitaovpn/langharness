@@ -39,6 +39,8 @@ from langharness_core.plugin import (
     default_llm_properties,
     preset_name_of,
 )
+from langharness_core.plugins.agents.registry import DEFAULT_AGENT_ID
+from langharness_core.plugins.agents.simple_prompt import simple_agent_prompt
 from langharness_plugin.contracts import ScopedPluginRegistrar
 from langharness_plugin.registry import PluginInstanceSnapshot
 from langharness_plugin.scope_const import AGENT_SCOPE_ID, agent_instance_scope_id
@@ -288,7 +290,12 @@ class AgentDirectoryPlugin:
         """
         stored = self._configs.get(agent_id)
         if stored is None:
-            return {plugin: {"enabled": True} for plugin in DEFAULT_AGENT_PLUGINS}
+            default_bindings = {
+                plugin: {"enabled": True} for plugin in DEFAULT_AGENT_PLUGINS
+            }
+            if agent_id == DEFAULT_AGENT_ID:
+                default_bindings["system-prompt-plugin"] = {"enabled": True}
+            return default_bindings
         preset = preset_name_of(stored)
         baseline = agent_preset_bindings(preset) if preset is not None else ()
         bindings: dict[str, dict[str, Any]] = {
@@ -315,8 +322,11 @@ class AgentDirectoryPlugin:
             if preset is not None
             else list(agent_required_modules())
         )
-        if "llm" in bindings:
-            required = [*required, AGENT_PLUGIN_CATALOG["llm"][0]]
+        required.extend(
+            AGENT_PLUGIN_CATALOG[name][0]
+            for name in bindings
+            if name in AGENT_PLUGIN_CATALOG
+        )
         missing = [
             module
             for module in required
@@ -396,6 +406,8 @@ class AgentDirectoryPlugin:
                 return None
         if plugin == "name":
             properties.setdefault("plugin.agent_name", agent.get("name") or agent["id"])
+        if plugin == "system-prompt-plugin" and agent["id"] == DEFAULT_AGENT_ID:
+            properties.setdefault("plugin.system_prompt", simple_agent_prompt())
         return agent_binding_properties(agent["id"], plugin, properties)
 
     def _teardown(self, agent_id: str) -> None:

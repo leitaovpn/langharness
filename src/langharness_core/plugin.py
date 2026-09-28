@@ -60,6 +60,11 @@ AGENT_PLUGIN_CATALOG: dict[str, tuple[str, str, str]] = {
         "agent-name-plugin-factory",
         SPEC_NAME,
     ),
+    "system-prompt-plugin": (
+        "langharness_core.plugins.system_prompt.template_system_prompt",
+        "system-prompt-plugin-factory",
+        SPEC_SYSTEM_PROMPT,
+    ),
     "workspace": (
         "langharness_core.plugins.workspace.root",
         "workspace-root-plugin-factory",
@@ -307,6 +312,10 @@ AGENT_LOOP_FIELDS: dict[str, str] = {
 }
 
 AGENT_PLUGIN_DESCRIPTIONS: dict[str, str] = {
+    "system-prompt-plugin": (
+        "Provides an agent-scoped system prompt. Properties: "
+        "plugin.system_prompt, plugin.agent_id."
+    ),
     "llm": (
         "Provides the LLM service consumed by an agent loop. Implements "
         "agent.plugin.llm. Use it whenever an agent must call a model; skip it "
@@ -782,6 +791,11 @@ def builtin_package() -> PluginPackage:
             ),
             PluginContribution(
                 "name-template", "agent", agent_plugin_template_descriptor("name")
+            ),
+            PluginContribution(
+                "system-prompt-template",
+                "agent",
+                agent_plugin_template_descriptor("system-prompt-plugin"),
             ),
             PluginContribution(
                 "workspace-template",
