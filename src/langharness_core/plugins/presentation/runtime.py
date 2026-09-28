@@ -69,7 +69,7 @@ class NodePTCRuntime:
             )
         )
         started = time.monotonic()
-        command = ["node", "--experimental-strip-types", bootstrap]
+        command = ["node", bootstrap]
         isolation = "process-only"
         if self._sandbox is not None:
             node = shutil.which("node")
@@ -152,7 +152,6 @@ class NodePTCRuntime:
                         if pending:
                             await asyncio.gather(*pending)
                         process.stdin.close()
-                        await process.stdin.wait_closed()
                         await process.wait()
                         stderr_task.cancel()
                         if message.get("error"):
