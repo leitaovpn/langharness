@@ -40,7 +40,6 @@ from langharness_core.contracts import (
     SPEC_WORKSPACE,
     SPEC_WORKSPACE_STATE,
 )
-from langharness_core.plugins.agents.export import AGENT_TOOL_EXPORTS
 from langharness_plugin.contracts import SPEC_TOOL_EXPORT_TARGET
 from langharness_plugin.package import PluginContribution, PluginPackage
 from langharness_plugin.registry import PluginDescriptor
@@ -927,6 +926,8 @@ def dynamic_package() -> PluginPackage:
 
 def agent_tools_package() -> PluginPackage:
     """Describe the agent management tools installed via dynamic discovery."""
+    from langharness_core.plugins.agents.export import AGENT_TOOL_EXPORTS
+
     return PluginPackage(
         id="agent.tools",
         version="1.0.0",
